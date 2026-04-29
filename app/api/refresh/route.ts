@@ -4,7 +4,7 @@ import { fetchTgvmaxData, SNCF_CACHE_TAG } from "@/lib/sncf";
 
 export async function POST() {
   try {
-    revalidateTag(SNCF_CACHE_TAG);
+    revalidateTag(SNCF_CACHE_TAG, "max");
     const data = await fetchTgvmaxData({ refresh: true });
 
     return NextResponse.json({
