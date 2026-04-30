@@ -75,6 +75,43 @@ export type RouteOption = {
 
 export type ReachableDirection = "outbound" | "inbound";
 
+export type FlexibleRouteSearchEvent =
+  | {
+      type: "meta";
+      checkedAt: string;
+      searchedFrom: string;
+      searchedTo: string;
+      totalTrains: number;
+    }
+  | {
+      type: "progress";
+      date: string;
+      legCount: number;
+      travelDays?: number;
+      message: string;
+      foundCount: number;
+      totalTrains?: number;
+    }
+  | {
+      type: "route";
+      route: RouteOption;
+      foundCount: number;
+    }
+  | {
+      type: "done";
+      foundCount: number;
+    };
+
+type FlexibleRouteSearchOptions = {
+  origin: string;
+  destination: string;
+  startDate?: string | null;
+  legCounts?: number[];
+  travelDays?: number[];
+  limit?: number;
+  searchDays?: number;
+};
+
 type OpenDataSoftResponse = {
   total_count?: number;
   nhits?: number;
@@ -404,6 +441,208 @@ export async function findReachableRoutes({
   };
 }
 
+export async function* streamFlexibleRouteSearch({
+  origin,
+  destination,
+  startDate,
+  legCounts,
+  travelDays,
+  limit
+}: FlexibleRouteSearchOptions): AsyncGenerator<FlexibleRouteSearchEvent> {
+  const today = formatDateInput(new Date());
+  const fromDate = startDate || today;
+  const toDate = addDays(fromDate, 29);
+  const selectedTravelDays = normalizeNumberSelection(travelDays, [1, 2, 3], [1, 2, 3]);
+  const maxTravelDays = Math.max(...selectedTravelDays);
+  let totalTrains = 0;
+
+  yield {
+    type: "meta",
+    checkedAt: new Date().toISOString(),
+    searchedFrom: fromDate,
+    searchedTo: toDate,
+    totalTrains
+  };
+
+  for (const candidateDate of dateRange(fromDate, 30)) {
+    yield {
+      type: "progress",
+      date: candidateDate,
+      legCount: 0,
+      message: `Loading trains for departures on ${candidateDate}.`,
+      foundCount: 0,
+      totalTrains
+    };
+
+    const data = await fetchAvailableTrainsBetweenDates(candidateDate, addDays(candidateDate, maxTravelDays - 1));
+    totalTrains += data.records.length;
+
+    yield {
+      type: "progress",
+      date: candidateDate,
+      legCount: 0,
+      message: `Loaded ${data.records.length} trains for ${candidateDate}. Checking possible connections.`,
+      foundCount: 0,
+      totalTrains
+    };
+
+    for (const event of findFlexibleRoutesInRecords(data.records, {
+      origin,
+      destination,
+      startDate: candidateDate,
+      legCounts,
+      travelDays,
+      limit,
+      searchDays: 1
+    })) {
+      if (event.type === "done") {
+        if (event.foundCount > 0) {
+          yield event;
+          return;
+        }
+        continue;
+      }
+
+      yield event;
+    }
+  }
+
+  yield { type: "done", foundCount: 0 };
+}
+
+export function* findFlexibleRoutesInRecords(
+  records: TrainAvailability[],
+  {
+    origin,
+    destination,
+    startDate,
+    legCounts,
+    travelDays,
+    limit = 10,
+    searchDays = 30
+  }: FlexibleRouteSearchOptions
+): Generator<FlexibleRouteSearchEvent> {
+  const fromDate = startDate || formatDateInput(new Date());
+  const selectedLegCounts = normalizeNumberSelection(legCounts, [1, 2, 3, 4], [1, 2, 3]);
+  const selectedTravelDays = normalizeNumberSelection(travelDays, [1, 2, 3], [1, 2, 3]);
+  const firstSearchMinute = dateIndex(fromDate) * 1440;
+  const sortedRecords = records
+    .filter((train) => departureMinute(train) >= firstSearchMinute)
+    .sort((a, b) => departureMinute(a) - departureMinute(b));
+  const byOriginCity = groupByOriginCity(sortedRecords);
+  const seenRoutes = new Set<string>();
+  let foundCount = 0;
+
+  for (const date of dateRange(fromDate, searchDays)) {
+    const dateRoutes: RouteOption[] = [];
+    const firstLegs = sortedRecords.filter(
+      (train) => train.date === date && stationMatches(train.origin, origin)
+    );
+
+    for (const travelDayCount of selectedTravelDays) {
+      for (const legCount of selectedLegCounts) {
+        yield {
+          type: "progress",
+          date,
+          legCount,
+          travelDays: travelDayCount,
+          message: `Verificando viagens de ${travelDayCount} dia${travelDayCount > 1 ? "s" : ""}, ${legCount} trem${legCount > 1 ? "s" : ""}, no dia ${date}.`,
+          foundCount
+        };
+
+        for (const firstLeg of firstLegs) {
+          walkRoute(
+            [firstLeg],
+            new Set([cityKey(firstLeg.origin)]),
+            legCount,
+            travelDayCount,
+            dateRoutes
+          );
+        }
+      }
+    }
+
+    if (dateRoutes.length) {
+      const bestRoutes = dateRoutes
+        .sort(compareFlexibleRoutes)
+        .slice(0, limit);
+
+      yield {
+        type: "progress",
+        date,
+        legCount: 0,
+        message: `Encontrei rotas saindo em ${date}. Mostrando as ${bestRoutes.length} melhores e parando a busca.`,
+        foundCount: bestRoutes.length
+      };
+
+      for (const route of bestRoutes) {
+        foundCount += 1;
+        yield { type: "route", route, foundCount };
+      }
+
+      yield { type: "done", foundCount };
+      return;
+    }
+  }
+
+  yield { type: "done", foundCount };
+
+  function walkRoute(
+    legs: TrainAvailability[],
+    visitedCities: Set<string>,
+    targetLegCount: number,
+    targetTravelDays: number,
+    routesForDate: RouteOption[]
+  ) {
+    const firstLeg = legs[0];
+    const lastLeg = legs[legs.length - 1];
+    const travelMinutes = arrivalMinute(lastLeg) - departureMinute(firstLeg);
+
+    if (travelMinutes > targetTravelDays * 1440) {
+      return;
+    }
+
+    if (stationMatches(lastLeg.destination, destination)) {
+      const route = routeFromLegs(legs);
+      const daySpan = routeTravelDaySpan(route);
+      if (
+        legs.length === targetLegCount &&
+        daySpan === targetTravelDays &&
+        !seenRoutes.has(route.id)
+      ) {
+        seenRoutes.add(route.id);
+        routesForDate.push(route);
+      }
+      return;
+    }
+
+    if (legs.length >= targetLegCount) {
+      return;
+    }
+
+    const nextLegs = byOriginCity.get(cityKey(lastLeg.destination)) ?? [];
+    for (const nextLeg of nextLegs) {
+      const waitMinutes = departureMinute(nextLeg) - arrivalMinute(lastLeg);
+      if (waitMinutes < 15) {
+        continue;
+      }
+
+      if (departureMinute(nextLeg) - departureMinute(firstLeg) > targetTravelDays * 1440) {
+        break;
+      }
+
+      const nextCity = cityKey(nextLeg.destination);
+      if (visitedCities.has(nextCity) && !stationMatches(nextLeg.destination, destination)) {
+        continue;
+      }
+
+      const nextVisited = new Set(visitedCities);
+      nextVisited.add(nextCity);
+      walkRoute([...legs, nextLeg], nextVisited, targetLegCount, targetTravelDays, routesForDate);
+    }
+  }
+}
+
 export function isNightIntercite(train: TrainAvailability) {
   const entity = normalizeText(`${train.entity} ${train.axe}`);
   return entity.includes("intercite") && arrivesNextDay(train);
@@ -676,8 +915,21 @@ function compareRoutes(a: RouteOption, b: RouteOption) {
   );
 }
 
+function compareFlexibleRoutes(a: RouteOption, b: RouteOption) {
+  return (
+    routeArrivalMinute(a) - routeArrivalMinute(b) ||
+    a.durationMinutes - b.durationMinutes ||
+    a.legs.length - b.legs.length ||
+    departureMinute(a.legs[0]) - departureMinute(b.legs[0])
+  );
+}
+
+function routeArrivalMinute(route: RouteOption) {
+  return arrivalMinute(route.legs[route.legs.length - 1]);
+}
+
 function sameCity(a: string, b: string) {
-  return normalizeText(stationCityLabel(a)) === normalizeText(stationCityLabel(b));
+  return cityKey(a) === cityKey(b);
 }
 
 function arrivesNextDay(train: TrainAvailability) {
@@ -733,6 +985,46 @@ function addDays(date: string, days: number) {
   const value = new Date(`${date}T00:00:00Z`);
   value.setUTCDate(value.getUTCDate() + days);
   return value.toISOString().slice(0, 10);
+}
+
+function dateRange(startDate: string, days: number) {
+  return Array.from({ length: days }, (_, index) => addDays(startDate, index));
+}
+
+function groupByOriginCity(records: TrainAvailability[]) {
+  const groups = new Map<string, TrainAvailability[]>();
+
+  for (const record of records) {
+    const key = cityKey(record.origin);
+    const group = groups.get(key);
+    if (group) {
+      group.push(record);
+    } else {
+      groups.set(key, [record]);
+    }
+  }
+
+  return groups;
+}
+
+function cityKey(value: string) {
+  return normalizeText(stationCityLabel(value));
+}
+
+function normalizeNumberSelection(
+  values: number[] | undefined,
+  allowed: number[],
+  fallback: number[]
+) {
+  const selected = Array.from(new Set(values ?? []))
+    .filter((value) => allowed.includes(value))
+    .sort((a, b) => a - b);
+
+  return selected.length ? selected : fallback;
+}
+
+function routeTravelDaySpan(route: RouteOption) {
+  return Math.max(1, dateIndex(route.arrivalDate) - dateIndex(route.departureDate) + 1);
 }
 
 function formatDateInput(date: Date) {

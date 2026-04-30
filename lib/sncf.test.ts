@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  findFlexibleRoutesInRecords,
   filterByDate,
   filterByOrigin,
   getOriginSuggestions,
   isAvailableStatus,
-  normalizeTgvmaxResponse
+  normalizeTgvmaxResponse,
+  type TrainAvailability
 } from "./sncf";
 
 describe("SNCF TGVMax normalization", () => {
@@ -150,3 +152,52 @@ describe("SNCF filtering helpers", () => {
     expect(isAvailableStatus("NON")).toBe(false);
   });
 });
+
+describe("Flexible route brute-force search", () => {
+  it("stops on the first departure day with routes and keeps the best options", () => {
+    const records = [
+      train("2026-05-03", "1", "PARIS (intramuros)", "LYON PART DIEU", "08:00", "10:00"),
+      train("2026-05-04", "2", "LYON PART DIEU", "DIJON", "09:00", "10:30"),
+      train("2026-05-04", "3", "DIJON", "NANTES", "12:00", "15:00"),
+      train("2026-05-05", "4", "PARIS (intramuros)", "NANTES", "07:00", "10:00")
+    ];
+
+    const events = Array.from(findFlexibleRoutesInRecords(records, {
+      origin: "PARIS (all stations)",
+      destination: "NANTES",
+      startDate: "2026-05-01",
+      legCounts: [1, 3],
+      travelDays: [1, 2],
+      limit: 10
+    }));
+    const routes = events.flatMap((event) => event.type === "route" ? [event.route] : []);
+
+    expect(routes.map((route) => route.legs.map((leg) => leg.trainNo))).toEqual([
+      ["1", "2", "3"]
+    ]);
+  });
+});
+
+function train(
+  date: string,
+  trainNo: string,
+  origin: string,
+  destination: string,
+  departureTime: string,
+  arrivalTime: string
+): TrainAvailability {
+  return {
+    id: [date, trainNo, origin, destination, departureTime].join(":"),
+    date,
+    trainNo,
+    entity: "TGV",
+    axe: "",
+    originCode: "",
+    destinationCode: "",
+    origin,
+    destination,
+    departureTime,
+    arrivalTime,
+    status: "OUI"
+  };
+}

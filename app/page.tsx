@@ -1,11 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { RouteOption, TrainAvailability } from "@/lib/sncf";
 
-type SearchMode = "outbound" | "inbound" | "route";
+type SearchMode = "outbound" | "inbound" | "route" | "flexible";
 type Status = "idle" | "loading" | "success" | "empty" | "error";
-type RouteDateMode = "specific" | "flexible" | "range";
 
 type TrainsResponse = {
   trains: TrainAvailability[];
@@ -27,6 +26,47 @@ type RoutesResponse = {
   searchedFrom: string;
   searchedTo: string;
   error?: string;
+};
+
+type FlexibleRouteEvent =
+  | {
+      type: "meta";
+      checkedAt: string;
+      searchedFrom: string;
+      searchedTo: string;
+      totalTrains: number;
+    }
+  | {
+      type: "progress";
+      date: string;
+      legCount: number;
+      travelDays?: number;
+      message: string;
+      foundCount: number;
+      totalTrains?: number;
+    }
+  | {
+      type: "route";
+      route: RouteOption;
+      foundCount: number;
+    }
+  | {
+      type: "done";
+      foundCount: number;
+    }
+  | {
+      type: "error";
+      error: string;
+    };
+
+type FlexibleSearchState = {
+  isSearching: boolean;
+  message: string;
+  currentCheck: string;
+  foundCount: number;
+  searchedFrom: string;
+  searchedTo: string;
+  totalTrains: number;
 };
 
 type GroupedResults = Array<{
@@ -157,10 +197,19 @@ export default function Home() {
   const [routes, setRoutes] = useState<RouteOption[]>([]);
   const [routeOrigin, setRouteOrigin] = useState("");
   const [routeDestination, setRouteDestination] = useState("");
-  const [routeDateMode, setRouteDateMode] = useState<RouteDateMode>("specific");
   const [routeDate, setRouteDate] = useState("");
-  const [routeEndDate, setRouteEndDate] = useState("");
   const [routeMaxLegs, setRouteMaxLegs] = useState(2);
+  const [flexLegCounts, setFlexLegCounts] = useState<number[]>([1, 2, 3]);
+  const [flexTravelDays, setFlexTravelDays] = useState<number[]>([1, 2, 3]);
+  const [flexState, setFlexState] = useState<FlexibleSearchState>({
+    isSearching: false,
+    message: "",
+    currentCheck: "",
+    foundCount: 0,
+    searchedFrom: "",
+    searchedTo: "",
+    totalTrains: 0
+  });
   const [selectedRouteId, setSelectedRouteId] = useState("");
   const [routeOriginSuggestions, setRouteOriginSuggestions] = useState<string[]>([]);
   const [routeDestinationSuggestions, setRouteDestinationSuggestions] = useState<string[]>([]);
@@ -168,15 +217,17 @@ export default function Home() {
   const [status, setStatus] = useState<Status>("idle");
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const flexAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const today = todayInputValue();
     setDate(today);
     setRouteDate(today);
-    setRouteEndDate(addDaysInput(today, 7));
   }, []);
 
   useEffect(() => {
+    flexAbortRef.current?.abort();
+    flexAbortRef.current = null;
     setSuggestions([]);
     setTrains([]);
     setRoutes([]);
@@ -184,10 +235,23 @@ export default function Home() {
     setStatus("idle");
     setError("");
     setRouteMaxLegs(2);
+    setFlexState((current) => ({
+      ...current,
+      isSearching: false,
+      message: "",
+      currentCheck: "",
+      foundCount: 0
+    }));
   }, [mode]);
 
   useEffect(() => {
-    if (mode === "route" || station.trim().length < 2) {
+    return () => {
+      flexAbortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isRouteSearchMode(mode) || station.trim().length < 2) {
       setSuggestions([]);
       return;
     }
@@ -221,7 +285,7 @@ export default function Home() {
   }, [mode, station]);
 
   useEffect(() => {
-    if (mode !== "route") {
+    if (!isRouteSearchMode(mode)) {
       return;
     }
 
@@ -229,7 +293,7 @@ export default function Home() {
   }, [mode, routeOrigin]);
 
   useEffect(() => {
-    if (mode !== "route") {
+    if (!isRouteSearchMode(mode)) {
       return;
     }
 
@@ -238,9 +302,13 @@ export default function Home() {
 
   const groupedResults = useMemo(() => groupTrains(trains, mode), [mode, trains]);
   const mapPoints = useMemo(() => buildMapPoints(trains, station, mode), [mode, station, trains]);
+  const displayRoutes = useMemo(
+    () => (mode === "flexible" ? sortFlexibleRoutes(routes) : routes),
+    [mode, routes]
+  );
   const selectedRoute = useMemo(
-    () => routes.find((route) => route.id === selectedRouteId) ?? routes[0],
-    [routes, selectedRouteId]
+    () => displayRoutes.find((route) => route.id === selectedRouteId) ?? displayRoutes[0],
+    [displayRoutes, selectedRouteId]
   );
   const firstPlaceDates = useMemo(() => getFirstPlaceDates(groupedResults), [groupedResults]);
 
@@ -346,18 +414,11 @@ export default function Home() {
     const params = new URLSearchParams({
       origin: routeOrigin.trim(),
       destination: routeDestination.trim(),
-      mode: routeDateMode,
-      maxLegs: String(routeDateMode === "range" ? 1 : nextMaxLegs)
+      mode: "specific",
+      maxLegs: String(nextMaxLegs)
     });
 
-    if (routeDateMode === "specific") {
-      params.set("date", routeDate);
-    } else if (routeDateMode === "flexible") {
-      params.set("startDate", routeDate);
-    } else {
-      params.set("startDate", routeDate);
-      params.set("endDate", routeEndDate);
-    }
+    params.set("date", routeDate);
 
     try {
       const response = await fetch(`/api/routes?${params}`);
@@ -382,8 +443,127 @@ export default function Home() {
     }
   }
 
-  async function searchWithMoreLegs() {
-    await searchRoute(undefined, Math.min(routeMaxLegs + 1, 4));
+  async function searchFlexible(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+
+    if (!routeOrigin.trim() || !routeDestination.trim()) {
+      setError("Choose both origin and destination.");
+      setStatus("error");
+      return;
+    }
+
+    if (!flexLegCounts.length || !flexTravelDays.length) {
+      setError("Choose at least one train count and one trip length.");
+      setStatus("error");
+      return;
+    }
+
+    flexAbortRef.current?.abort();
+    const controller = new AbortController();
+    flexAbortRef.current = controller;
+
+    setStatus("loading");
+    setError("");
+    setRoutes([]);
+    setSelectedRouteId("");
+    setFlexState({
+      isSearching: true,
+      message: "Preparando a janela de disponibilidade da SNCF...",
+      currentCheck: flexibleCheckLabel(routeDate, flexTravelDays[0] ?? 1, flexLegCounts[0] ?? 1),
+      foundCount: 0,
+      searchedFrom: routeDate,
+      searchedTo: "",
+      totalTrains: 0
+    });
+
+    const params = new URLSearchParams({
+      origin: routeOrigin.trim(),
+      destination: routeDestination.trim(),
+      startDate: routeDate,
+      legCounts: flexLegCounts.join(","),
+      travelDays: flexTravelDays.join(",")
+    });
+
+    try {
+      const response = await fetch(`/api/flexible-routes?${params}`, {
+        signal: controller.signal
+      });
+
+      if (!response.ok || !response.body) {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? "Flexible routes could not be searched.");
+      }
+
+      await readFlexibleStream(response.body, (eventData) => {
+        if (eventData.type === "meta") {
+          setCheckedAt(eventData.checkedAt);
+          setFlexState((current) => ({
+            ...current,
+            searchedFrom: eventData.searchedFrom,
+            searchedTo: eventData.searchedTo,
+            totalTrains: eventData.totalTrains,
+            message: "Iniciando a busca por força bruta dia a dia."
+          }));
+          return;
+        }
+
+        if (eventData.type === "progress") {
+          setFlexState((current) => ({
+            ...current,
+            message: eventData.message,
+            currentCheck:
+              eventData.travelDays && eventData.legCount
+                ? flexibleCheckLabel(eventData.date, eventData.travelDays, eventData.legCount)
+                : current.currentCheck,
+            foundCount: eventData.foundCount,
+            totalTrains: eventData.totalTrains ?? current.totalTrains
+          }));
+          return;
+        }
+
+        if (eventData.type === "route") {
+          setRoutes((current) => mergeRoute(current, eventData.route));
+          setSelectedRouteId((current) => current || eventData.route.id);
+          setStatus("success");
+          setFlexState((current) => ({
+            ...current,
+            foundCount: eventData.foundCount,
+            message: `Found ${eventData.foundCount} option${eventData.foundCount > 1 ? "s" : ""}. Stopping on this departure day.`
+          }));
+          return;
+        }
+
+        if (eventData.type === "error") {
+          throw new Error(eventData.error);
+        }
+      });
+
+      setFlexState((current) => ({ ...current, isSearching: false, message: "Search complete." }));
+      setStatus((current) => (current === "success" ? "success" : "empty"));
+    } catch (requestError) {
+      if (controller.signal.aborted) {
+        setFlexState((current) => ({ ...current, isSearching: false, message: "Search stopped." }));
+        setStatus((current) => (current === "success" ? "success" : "idle"));
+        return;
+      }
+
+      setRoutes([]);
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Flexible routes could not be searched."
+      );
+      setFlexState((current) => ({ ...current, isSearching: false }));
+      setStatus("error");
+    } finally {
+      if (flexAbortRef.current === controller) {
+        flexAbortRef.current = null;
+      }
+    }
+  }
+
+  function stopFlexibleSearch() {
+    flexAbortRef.current?.abort();
   }
 
   async function refresh() {
@@ -461,6 +641,15 @@ export default function Home() {
             >
               Route
             </button>
+            <button
+              aria-selected={mode === "flexible"}
+              className={mode === "flexible" ? "tab active" : "tab"}
+              onClick={() => setMode("flexible")}
+              role="tab"
+              type="button"
+            >
+              Flexible
+            </button>
           </div>
 
           <div className="intro">
@@ -469,18 +658,22 @@ export default function Home() {
                 ? "Find free MAX trains from your station."
                 : mode === "inbound"
                   ? "Find free MAX trains arriving at your station."
-                  : "Find a free MAX route between two cities."}
+                  : mode === "route"
+                    ? "Go from one city to another on one date."
+                    : "Brute-force a flexible MAX route."}
             </h2>
             <p>
               {mode === "outbound"
                 ? "Pick an origin and see every available destination."
                 : mode === "inbound"
                   ? "Pick an arrival city and see every available departure city."
-                  : "Search direct trains first, then same-day or flexible connections with at least 15m between legs."}
+                  : mode === "route"
+                    ? "Search direct trains and same-day connections for the exact date you choose."
+                    : "Pick what you are willing to tolerate, then the app scans forward from your date and stops on the first departure day with good routes."}
             </p>
           </div>
 
-          {mode !== "route" ? (
+          {!isRouteSearchMode(mode) ? (
           <form className="search-form" onSubmit={search}>
             <div className="field">
               <label htmlFor="station">
@@ -526,8 +719,8 @@ export default function Home() {
               {status === "loading" ? "Searching..." : "Search trains"}
             </button>
           </form>
-          ) : (
-            <form className="route-form" onSubmit={(event) => searchRoute(event, 2)}>
+          ) : mode === "route" ? (
+            <form className="route-form route-form-simple" onSubmit={(event) => searchRoute(event, 2)}>
               <StationInput
                 id="route-origin"
                 label="Origin"
@@ -553,21 +746,7 @@ export default function Home() {
                 value={routeDestination}
               />
               <div className="field">
-                <label htmlFor="route-mode">Date mode</label>
-                <select
-                  id="route-mode"
-                  onChange={(event) => setRouteDateMode(event.target.value as RouteDateMode)}
-                  value={routeDateMode}
-                >
-                  <option value="specific">Specific date</option>
-                  <option value="flexible">Flexible from date</option>
-                  <option value="range">Available period</option>
-                </select>
-              </div>
-              <div className="field">
-                <label htmlFor="route-date">
-                  {routeDateMode === "specific" ? "Travel date" : "Start date"}
-                </label>
+                <label htmlFor="route-date">Travel date</label>
                 <input
                   id="route-date"
                   onChange={(event) => setRouteDate(event.target.value)}
@@ -575,17 +754,6 @@ export default function Home() {
                   value={routeDate}
                 />
               </div>
-              {routeDateMode === "range" ? (
-                <div className="field">
-                  <label htmlFor="route-end-date">End date</label>
-                  <input
-                    id="route-end-date"
-                    onChange={(event) => setRouteEndDate(event.target.value)}
-                    type="date"
-                    value={routeEndDate}
-                  />
-                </div>
-              ) : null}
               <button
                 className="primary-button"
                 disabled={status === "loading"}
@@ -594,9 +762,86 @@ export default function Home() {
                 {status === "loading" ? "Searching..." : "Find route"}
               </button>
             </form>
+          ) : (
+            <form className="flexible-form" onSubmit={searchFlexible}>
+              <StationInput
+                id="flex-origin"
+                label="Origin"
+                onChange={setRouteOrigin}
+                onPick={(value) => {
+                  setRouteOrigin(value);
+                  setRouteOriginSuggestions([]);
+                }}
+                placeholder="Paris..."
+                suggestions={routeOriginSuggestions}
+                value={routeOrigin}
+              />
+              <StationInput
+                id="flex-destination"
+                label="Destination"
+                onChange={setRouteDestination}
+                onPick={(value) => {
+                  setRouteDestination(value);
+                  setRouteDestinationSuggestions([]);
+                }}
+                placeholder="Nice..."
+                suggestions={routeDestinationSuggestions}
+                value={routeDestination}
+              />
+              <div className="field">
+                <label htmlFor="flex-date">Start searching from</label>
+                <input
+                  id="flex-date"
+                  onChange={(event) => setRouteDate(event.target.value)}
+                  type="date"
+                  value={routeDate}
+                />
+              </div>
+              <button
+                className="primary-button"
+                disabled={flexState.isSearching}
+                type="submit"
+              >
+                {flexState.isSearching ? "Searching..." : "Start brute force"}
+              </button>
+
+              <div className="choice-panel" aria-label="Flexible route limits">
+                <div className="choice-set">
+                  <span>Number of trains</span>
+                  {[1, 2, 3, 4].map((count) => (
+                    <label className={flexLegCounts.includes(count) ? "active" : ""} key={count}>
+                      <input
+                        checked={flexLegCounts.includes(count)}
+                        onChange={() => setFlexLegCounts((current) => toggleNumber(current, count))}
+                        type="checkbox"
+                      />
+                      {count}
+                    </label>
+                  ))}
+                </div>
+                <div className="choice-set">
+                  <span>Trip can last</span>
+                  {[1, 2, 3].map((days) => (
+                    <label className={flexTravelDays.includes(days) ? "active" : ""} key={days}>
+                      <input
+                        checked={flexTravelDays.includes(days)}
+                        onChange={() => setFlexTravelDays((current) => toggleNumber(current, days))}
+                        type="checkbox"
+                      />
+                      {days} day{days > 1 ? "s" : ""}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="warning-card">
+                This is a brute-force search. It can take a while, but it stops when it finds the
+                first departure day with routes and only shows the best arrivals for that day.
+              </div>
+            </form>
           )}
 
-          {mode !== "route" ? (
+          {!isRouteSearchMode(mode) ? (
             <label className="check-row">
               <input
                 checked={nightOnly}
@@ -607,7 +852,7 @@ export default function Home() {
             </label>
           ) : null}
 
-          {mode !== "route" ? (
+          {!isRouteSearchMode(mode) ? (
             <div className="leg-filter" aria-label="Reachable train count">
               <span>Map</span>
               {[1, 2, 3].map((legCount) => (
@@ -645,38 +890,37 @@ export default function Home() {
                   ? "Start with an origin station."
                   : mode === "inbound"
                     ? "Start with an arrival station."
-                    : "Start with an origin and destination."}
+                    : mode === "route"
+                      ? "Start with an origin, destination, and date."
+                      : "Start with a route and the limits you can accept."}
               </strong>
               Try official names or city-wide options such as PARIS (all stations).
             </div>
           ) : null}
 
-          {status === "loading" ? (
+          {status === "loading" && mode !== "flexible" ? (
             <div className="message">
               <strong>Searching SNCF availability...</strong>
               Checking the current MAX dataset for matching trains.
             </div>
           ) : null}
 
+          {mode === "flexible" && (flexState.isSearching || flexState.message) ? (
+            <FlexibleProgress state={flexState} onStop={stopFlexibleSearch} />
+          ) : null}
+
           {status === "empty" ? (
             <div className="message">
               <strong>No available MAX trains found.</strong>
               {mode === "route"
-                ? routeDateMode === "range"
-                  ? "No direct train was found inside this period."
-                  : `No route was found with up to ${routeMaxLegs} legs.`
+                ? `No route was found with up to ${routeMaxLegs} legs on the selected date.`
+                : mode === "flexible"
+                  ? "The brute-force scan finished without finding a route inside the selected limits."
                 : reachableLegs
                   ? "No reachable city was found with up to 3 legs for this date."
                 : `SNCF Open Data has no available MAX seats for this search${date ? " on the selected date" : ""}.`}
-              {mode === "route" && routeDateMode !== "range" && routeMaxLegs < 4 ? (
-                <div className="heavy-search">
-                  <span>
-                    Search with up to {routeMaxLegs + 1} legs? This can be heavier and may take longer.
-                  </span>
-                  <button onClick={searchWithMoreLegs} type="button">
-                    Try {routeMaxLegs + 1} legs
-                  </button>
-                </div>
+              {mode === "route" ? (
+                <span> Try the Flexible tab if you want the app to search later days and longer paths.</span>
               ) : null}
             </div>
           ) : null}
@@ -688,20 +932,23 @@ export default function Home() {
             </div>
           ) : null}
 
-          {status === "success" && mode !== "route" && !reachableLegs ? (
+          {status === "success" && !isRouteSearchMode(mode) && !reachableLegs ? (
             <AvailabilityMap points={mapPoints} mode={mode} />
           ) : null}
 
-          {status === "success" && mode !== "route" && reachableLegs ? (
+          {status === "success" && !isRouteSearchMode(mode) && reachableLegs ? (
             <ReachableMap routes={routes} mode={mode} station={station} />
           ) : null}
 
-          {status === "success" && mode === "route" && selectedRoute ? (
+          {(status === "success" || (mode === "flexible" && routes.length > 0)) &&
+          isRouteSearchMode(mode) &&
+          selectedRoute ? (
             <RouteMap route={selectedRoute} />
           ) : null}
 
-          {status === "success" && (mode === "route" || reachableLegs) ? (
-            reachableLegs && mode !== "route" ? (
+          {(status === "success" || (mode === "flexible" && routes.length > 0)) &&
+          (isRouteSearchMode(mode) || reachableLegs) ? (
+            reachableLegs && !isRouteSearchMode(mode) ? (
               <ReachableResults
                 mode={mode}
                 onSelect={setSelectedRouteId}
@@ -711,13 +958,14 @@ export default function Home() {
             ) : (
               <RouteResults
                 onSelect={setSelectedRouteId}
-                routes={routes}
+                routes={displayRoutes}
                 selectedRouteId={selectedRoute?.id ?? ""}
+                variant={mode === "flexible" ? "flexible" : "default"}
               />
             )
           ) : null}
 
-          {status === "success" && mode !== "route" && !reachableLegs
+          {status === "success" && !isRouteSearchMode(mode) && !reachableLegs
             ? groupedResults.map((day) => (
                 <div className="day-group" key={day.date}>
                   <div className="day-heading">
@@ -818,11 +1066,13 @@ function StationInput({
 function RouteResults({
   onSelect,
   routes,
-  selectedRouteId
+  selectedRouteId,
+  variant = "default"
 }: {
   onSelect: (routeId: string) => void;
   routes: RouteOption[];
   selectedRouteId: string;
+  variant?: "default" | "flexible";
 }) {
   return (
     <div className="route-results">
@@ -842,7 +1092,13 @@ function RouteResults({
         >
           <header>
             <div>
-              <strong>{route.type === "direct" ? "Direct train" : "Connection found"}</strong>
+              <strong>
+                {route.type === "direct"
+                  ? "Direct train"
+                  : variant === "flexible"
+                    ? `${routeTravelDays(route)} day brute-force route`
+                    : "Connection found"}
+              </strong>
               <span>
                 {formatDuration(route.durationMinutes)}
                 {route.waitMinutes ? `, including ${formatDuration(route.waitMinutes)} waiting` : ""}
@@ -868,6 +1124,37 @@ function RouteResults({
           </div>
         </article>
       ))}
+    </div>
+  );
+}
+
+function FlexibleProgress({
+  onStop,
+  state
+}: {
+  onStop: () => void;
+  state: FlexibleSearchState;
+}) {
+  return (
+    <div className="search-progress">
+      <div className={state.isSearching ? "progress-orbit" : "progress-orbit stopped"} aria-hidden="true" />
+      <div>
+        <strong>{state.isSearching ? "Brute-force search running..." : "Brute-force search finished."}</strong>
+        <span className="current-check">
+          {state.currentCheck || state.message || "Waiting for the scan to start."}
+        </span>
+        {state.currentCheck && state.message ? <small>{state.message}</small> : null}
+        <div className="progress-facts">
+          <em>{state.foundCount} route{state.foundCount === 1 ? "" : "s"} found</em>
+          {state.totalTrains ? <em>{state.totalTrains} trains loaded</em> : null}
+          {state.searchedTo ? <em>{state.searchedFrom} to {state.searchedTo}</em> : null}
+        </div>
+      </div>
+      {state.isSearching ? (
+        <button onClick={onStop} type="button">
+          Stop
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -1483,6 +1770,96 @@ function countDayTrains(day: GroupedResults[number]) {
   return day.places.reduce((sum, place) => sum + place.trains.length, 0);
 }
 
+function isRouteSearchMode(mode: SearchMode) {
+  return mode === "route" || mode === "flexible";
+}
+
+function toggleNumber(values: number[], value: number) {
+  return values.includes(value)
+    ? values.filter((item) => item !== value)
+    : [...values, value].sort((a, b) => a - b);
+}
+
+function flexibleCheckLabel(date: string, travelDays: number, legCount: number) {
+  return `${travelDays} dia${travelDays > 1 ? "s" : ""}, ${legCount} trem${legCount > 1 ? "s" : ""}, dia ${date}`;
+}
+
+function mergeRoute(routes: RouteOption[], route: RouteOption) {
+  if (routes.some((current) => current.id === route.id)) {
+    return routes;
+  }
+
+  return sortFlexibleRoutes([...routes, route]);
+}
+
+async function readFlexibleStream(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (eventData: FlexibleRouteEvent) => void
+) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (line.trim()) {
+        onEvent(JSON.parse(line) as FlexibleRouteEvent);
+      }
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  if (buffer.trim()) {
+    onEvent(JSON.parse(buffer) as FlexibleRouteEvent);
+  }
+}
+
+function sortFlexibleRoutes(routes: RouteOption[]) {
+  return routes.slice().sort((a, b) => {
+    return (
+      routeArrivalValue(a) - routeArrivalValue(b) ||
+      routeTravelDays(a) - routeTravelDays(b) ||
+      a.legs.length - b.legs.length ||
+      a.durationMinutes - b.durationMinutes ||
+      routeDepartureValue(a) - routeDepartureValue(b)
+    );
+  });
+}
+
+function routeArrivalValue(route: RouteOption) {
+  const lastLeg = route.legs[route.legs.length - 1];
+  return dateIndexInput(route.arrivalDate) * 1440 + timeToMinutes(lastLeg?.arrivalTime ?? "00:00");
+}
+
+function routeDepartureValue(route: RouteOption) {
+  const firstLeg = route.legs[0];
+  return (
+    dateIndexInput(firstLeg?.date ?? route.departureDate) * 1440 +
+    timeToMinutes(firstLeg?.departureTime ?? "00:00")
+  );
+}
+
+function routeTravelDays(route: RouteOption) {
+  return Math.max(1, dateIndexInput(route.arrivalDate) - dateIndexInput(route.departureDate) + 1);
+}
+
+function dateIndexInput(date: string) {
+  return Math.floor(Date.parse(`${date}T00:00:00Z`) / 86400000);
+}
+
+function timeToMinutes(time: string) {
+  const [hours = "0", minutes = "0"] = time.split(":");
+  return Number(hours) * 60 + Number(minutes);
+}
+
 async function loadRouteSuggestions(
   value: string,
   field: "origin" | "destination",
@@ -1538,12 +1915,6 @@ function formatCheckedAt(value: string) {
 
 function todayInputValue() {
   return formatInputDate(new Date());
-}
-
-function addDaysInput(date: string, days: number) {
-  const value = new Date(`${date}T00:00:00`);
-  value.setDate(value.getDate() + days);
-  return formatInputDate(value);
 }
 
 function formatInputDate(date: Date) {

@@ -141,7 +141,7 @@ button {
 
 .tabs {
   display: inline-grid;
-  grid-template-columns: repeat(3, minmax(112px, 1fr));
+  grid-template-columns: repeat(4, minmax(112px, 1fr));
   width: fit-content;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -192,9 +192,79 @@ button {
 
 .route-form {
   display: grid;
-  grid-template-columns: repeat(2, minmax(220px, 1fr)) minmax(150px, 190px) minmax(150px, 190px) auto;
+  grid-template-columns: repeat(2, minmax(220px, 1fr)) minmax(150px, 190px) auto;
   gap: 12px;
   align-items: end;
+}
+
+.flexible-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr)) minmax(170px, 210px) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.choice-panel {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.choice-set {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 50px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfdfe;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.choice-set > span {
+  margin-right: 4px;
+  color: var(--ink);
+}
+
+.choice-set label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 10px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.choice-set label.active {
+  border-color: var(--accent);
+  background: #eef8f9;
+  color: var(--accent-strong);
+}
+
+.choice-set input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--accent);
+}
+
+.warning-card {
+  grid-column: 1 / -1;
+  border: 1px solid rgba(160, 100, 0, 0.25);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: rgba(160, 100, 0, 0.08);
+  color: #6d4700;
+  font-size: 0.92rem;
+  font-weight: 700;
+  line-height: 1.45;
 }
 
 .field {
@@ -348,6 +418,82 @@ button {
   display: block;
   margin-bottom: 6px;
   color: var(--ink);
+}
+
+.search-progress {
+  display: grid;
+  grid-template-columns: 42px 1fr auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  background: #ffffff;
+}
+
+.search-progress strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.search-progress span {
+  color: var(--muted);
+}
+
+.search-progress .current-check {
+  display: block;
+  color: var(--ink);
+  font-size: 1.02rem;
+  font-weight: 800;
+}
+
+.search-progress small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.search-progress button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: #ffffff;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.progress-orbit {
+  width: 34px;
+  height: 34px;
+  border: 4px solid #d7ecef;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.85s linear infinite;
+}
+
+.progress-orbit.stopped {
+  animation: none;
+  border-color: #d7ecef;
+  border-top-color: var(--good);
+}
+
+.progress-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.progress-facts em {
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: #eef6f7;
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  font-style: normal;
+  font-weight: 800;
 }
 
 .heavy-search {
@@ -770,6 +916,12 @@ button {
   font-size: 0.88rem;
 }
 
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 760px) {
   .main {
     width: min(100% - 22px, 1120px);
@@ -802,12 +954,22 @@ button {
     grid-template-columns: 1fr;
   }
 
+  .flexible-form,
+  .choice-panel {
+    grid-template-columns: 1fr;
+  }
+
   .tabs {
     width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .primary-button {
     width: 100%;
+  }
+
+  .search-progress {
+    grid-template-columns: 1fr;
   }
 
   .day-heading {
