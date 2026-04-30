@@ -18,6 +18,9 @@ const SELECT_FIELDS = [
 ].join(",");
 
 const PAGE_SIZE = 100;
+const RANDOM_BLOCK_RECORDS = 300;
+const RANDOM_MIDDLE_RECORDS = 600;
+const RANDOM_FALLBACK_RECORDS = 900;
 const MIN_RANDOM_TRANSFER_MINUTES = 45;
 
 export type RawTgvmaxRecord = Partial<{
@@ -496,9 +499,9 @@ export async function findRandomTrip({
     .sort((a, b) => departureMinute(a) - departureMinute(b));
   const targetCityCounts = randomCityCount
     ? randomCityTargets(maxCitiesForWindow)
-    : [Math.max(1, Math.min(maxCitiesForWindow, cityCount))];
+    : fixedRandomTargets(maxCitiesForWindow, cityCount);
   const attempts = randomCityCount ? 30 : 24;
-  const excludedTrips = new Set(excludeTripIds);
+  const excludedTripSet = new Set(excludeTripIds);
   const excludedCityKeys = new Set(excludeCities.map(cityKey));
   const candidates: RandomTripOption[] = [];
   const searchProfiles = [
@@ -506,8 +509,9 @@ export async function findRandomTrip({
     { avoidAirports: true, minStayMinutes: 240 },
     { avoidAirports: false, minStayMinutes: 180 }
   ];
+  const cityAvoidanceSets = excludedCityKeys.size ? [excludedCityKeys, new Set<string>()] : [new Set<string>()];
 
-  for (const activeExcludedCityKeys of excludedCityKeys.size ? [excludedCityKeys, new Set<string>()] : [excludedCityKeys]) {
+  for (const activeExcludedCityKeys of cityAvoidanceSets) {
     for (const profile of searchProfiles) {
       for (const targetCities of targetCityCounts) {
         candidates.push(
@@ -520,7 +524,7 @@ export async function findRandomTrip({
             startAt,
             targetCities,
             avoidAirports: profile.avoidAirports
-          }).filter((trip) => !excludedTrips.has(trip.id))
+          })
         );
 
         for (let attempt = 0; attempt < attempts / 2; attempt += 1) {
@@ -537,12 +541,12 @@ export async function findRandomTrip({
             avoidAirports: profile.avoidAirports
           });
 
-          if (trip && !excludedTrips.has(trip.id)) {
+          if (trip) {
             candidates.push(trip);
           }
         }
 
-        if (randomCityCount && targetCities <= 2) {
+        if (targetCities <= 2) {
           candidates.push(
             ...findTwoCityRandomTrips(records, {
               checkedAt: data.checkedAt,
@@ -553,29 +557,27 @@ export async function findRandomTrip({
               origin,
               startAt,
               avoidAirports: profile.avoidAirports
-            }).filter((trip) => !excludedTrips.has(trip.id))
+            })
           );
         }
 
-        const candidatesForTarget = dedupeRandomTrips(candidates).filter((trip) => trip.stops.length === targetCities);
-
-        if (randomCityCount && candidatesForTarget.length) {
+        if (candidates.length > 420) {
           break;
         }
       }
 
-      if (candidates.length) {
+      if (candidates.length > 420) {
         break;
       }
     }
 
-    if (candidates.length) {
+    if (candidates.length > 420) {
       break;
     }
   }
 
   return {
-    trip: pickRandomTrip(dedupeRandomTrips(candidates), excludedCityKeys),
+    trip: pickRandomTrip(dedupeRandomTrips(candidates), excludedCityKeys, excludedTripSet),
     checkedAt: data.checkedAt
   };
 }
@@ -1223,21 +1225,19 @@ async function fetchRandomTripRecords(origin: string, startDate: string, endDate
     `date >= date'${startDate}'`,
     `date <= date'${endDate}'`
   ].join(" and ");
-  const [outboundPage, inboundPage] = await Promise.all([
-    requestSncfRecords({
+  const [outboundResults, inboundResults] = await Promise.all([
+    requestSncfRecordPages({
       select: SELECT_FIELDS,
       where: `${dateWindow} and ${originWhereClause(origin)}`,
-      limit: PAGE_SIZE,
       orderBy: "date asc, heure_depart asc"
-    }),
-    requestSncfRecords({
+    }, RANDOM_BLOCK_RECORDS),
+    requestSncfRecordPages({
       select: SELECT_FIELDS,
       where: `${dateWindow} and ${destinationWhereClause(origin)}`,
-      limit: PAGE_SIZE,
       orderBy: "date asc, heure_depart asc"
-    })
+    }, RANDOM_BLOCK_RECORDS)
   ]);
-  const baseResults = [...(outboundPage.results ?? []), ...(inboundPage.results ?? [])];
+  const baseResults = [...outboundResults, ...inboundResults];
   const baseRecords = normalizeTgvmaxResponse({ total_count: baseResults.length, results: baseResults }).records;
   const candidateCities = randomCandidateCities(baseRecords, origin);
   let middleResults: RawTgvmaxRecord[] = [];
@@ -1247,21 +1247,61 @@ async function fetchRandomTripRecords(origin: string, startDate: string, endDate
       .slice(0, 14)
       .map((city) => `search(origine, ${odsString(city)})`)
       .join(" or ");
-    const middlePage = await requestSncfRecords({
+    middleResults = await requestSncfRecordPages({
       select: SELECT_FIELDS,
       where: `${dateWindow} and (${originClauses})`,
-      limit: PAGE_SIZE,
       orderBy: "date asc, heure_depart asc"
-    });
-    middleResults = middlePage.results ?? [];
+    }, RANDOM_MIDDLE_RECORDS);
   }
 
-  const results = dedupeRawRecords([...baseResults, ...middleResults]);
+  let results = dedupeRawRecords([...baseResults, ...middleResults]);
+
+  if (results.length < 80) {
+    const fallbackResults = await requestSncfRecordPages({
+      select: SELECT_FIELDS,
+      where: dateWindow,
+      orderBy: "date asc, heure_depart asc"
+    }, RANDOM_FALLBACK_RECORDS);
+    results = dedupeRawRecords([...results, ...fallbackResults]);
+  }
 
   return normalizeTgvmaxResponse({
     total_count: results.length,
     results
   });
+}
+
+async function requestSncfRecordPages(
+  query: {
+    select: string;
+    where?: string;
+    groupBy?: string;
+    orderBy?: string;
+  },
+  maxRecords: number
+) {
+  const allResults: RawTgvmaxRecord[] = [];
+  let offset = 0;
+  let totalCount = 0;
+
+  do {
+    const page = await requestSncfRecords({
+      ...query,
+      limit: PAGE_SIZE,
+      offset
+    });
+    const results = page.results ?? [];
+
+    allResults.push(...results);
+    totalCount = page.total_count ?? allResults.length;
+    offset += results.length;
+
+    if (!results.length || results.length < PAGE_SIZE) {
+      break;
+    }
+  } while (offset < totalCount && allResults.length < maxRecords);
+
+  return allResults.slice(0, maxRecords);
 }
 
 function randomCandidateCities(records: TrainAvailability[], origin: string) {
@@ -1603,14 +1643,22 @@ function dedupeRandomTrips(trips: RandomTripOption[]) {
   return Array.from(new Map(trips.map((trip) => [trip.id, trip])).values());
 }
 
-function pickRandomTrip(trips: RandomTripOption[], excludedCityKeys: Set<string>) {
+function pickRandomTrip(
+  trips: RandomTripOption[],
+  excludedCityKeys: Set<string>,
+  excludedTripIds: Set<string>
+) {
   if (!trips.length) {
     return null;
   }
 
   const rankedTrips = trips
     .map((trip) => ({
-      score: scoreRandomTrip(trip) - cityRepeatPenalty(trip, excludedCityKeys) + Math.random() * 600,
+      score:
+        scoreRandomTrip(trip) -
+        cityRepeatPenalty(trip, excludedCityKeys) -
+        tripRepeatPenalty(trip, excludedTripIds) +
+        Math.random() * 700,
       trip
     }))
     .sort((a, b) => b.score - a.score)
@@ -1626,12 +1674,20 @@ function pickRandomTrip(trips: RandomTripOption[], excludedCityKeys: Set<string>
 
   const diverseTrips = [...bySignature.values()].slice(0, Math.min(bySignature.size, 14));
   const topTrips = diverseTrips.length ? diverseTrips : rankedTrips.slice(0, Math.min(rankedTrips.length, 8));
-  return weightedRandomTrip(topTrips, excludedCityKeys);
+  return weightedRandomTrip(topTrips, excludedCityKeys, excludedTripIds);
 }
 
-function weightedRandomTrip(trips: RandomTripOption[], excludedCityKeys: Set<string>) {
+function weightedRandomTrip(
+  trips: RandomTripOption[],
+  excludedCityKeys: Set<string>,
+  excludedTripIds: Set<string>
+) {
   const weights = trips.map((trip, index) => {
-    const score = scoreRandomTrip(trip) - cityRepeatPenalty(trip, excludedCityKeys) - index * 120;
+    const score =
+      scoreRandomTrip(trip) -
+      cityRepeatPenalty(trip, excludedCityKeys) -
+      tripRepeatPenalty(trip, excludedTripIds) -
+      index * 120;
     return Math.max(1, score);
   });
   const total = weights.reduce((sum, weight) => sum + weight, 0);
@@ -1649,8 +1705,12 @@ function weightedRandomTrip(trips: RandomTripOption[], excludedCityKeys: Set<str
 
 function cityRepeatPenalty(trip: RandomTripOption, excludedCityKeys: Set<string>) {
   return trip.stops.reduce((penalty, stop) => {
-    return penalty + (excludedCityKeys.has(cityKey(stop.city || stop.arrivalLeg.destination)) ? 3500 : 0);
+    return penalty + (excludedCityKeys.has(cityKey(stop.city || stop.arrivalLeg.destination)) ? 2600 : 0);
   }, 0);
+}
+
+function tripRepeatPenalty(trip: RandomTripOption, excludedTripIds: Set<string>) {
+  return excludedTripIds.has(trip.id) ? 5000 : 0;
 }
 
 function tripCitySignature(trip: RandomTripOption) {
@@ -1673,10 +1733,20 @@ function isAirportStation(station: string) {
 
 function randomCityTargets(maxCitiesForWindow: number) {
   const maxCities = Math.min(4, Math.max(1, maxCitiesForWindow));
-  const minCities = maxCitiesForWindow >= 2 ? 2 : 1;
   const targets: number[] = [];
 
-  for (let count = maxCities; count >= minCities; count -= 1) {
+  for (let count = maxCities; count >= 1; count -= 1) {
+    targets.push(count);
+  }
+
+  return targets;
+}
+
+function fixedRandomTargets(maxCitiesForWindow: number, cityCount: number) {
+  const requestedCities = Math.max(1, Math.min(maxCitiesForWindow, cityCount));
+  const targets: number[] = [];
+
+  for (let count = requestedCities; count >= 1; count -= 1) {
     targets.push(count);
   }
 
@@ -1903,7 +1973,7 @@ function addAllStationsSuggestions(stations: string[]) {
 }
 
 function allStationsCity(value: string) {
-  const match = value.trim().match(/^(.+?)\s+\(all stations\)$/i);
+  const match = value.trim().match(/^(.+?)\s+\((all stations|intramuros)\)$/i);
   return match?.[1]?.trim() ?? "";
 }
 
@@ -1940,6 +2010,14 @@ function stationCityLabel(value: string) {
     }
 
     return words.slice(0, end).join(" ");
+  }
+
+  if (["LE", "LA", "LES"].includes(words[0] ?? "") && words[1]) {
+    return words.slice(0, 2).join(" ");
+  }
+
+  if ((words[0] ?? "").startsWith("L'") && words[0].length > 2) {
+    return words[0];
   }
 
   return cleaned.split(" ")[0] ?? cleaned;

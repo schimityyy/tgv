@@ -846,6 +846,14 @@ button {
   gap: 4px;
 }
 
+.route-option header .route-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 50%;
+}
+
 .route-option header strong {
   font-size: 1.05rem;
 }
@@ -952,12 +960,38 @@ button {
   border-radius: 8px;
   padding: 16px;
   background: #ffffff;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+
+.train-card:hover,
+.train-card:focus-visible,
+.train-card.return-open {
+  border-color: rgba(0, 127, 149, 0.45);
+  box-shadow: 0 12px 28px rgba(11, 47, 55, 0.08);
+}
+
+.train-card:focus-visible {
+  outline: 3px solid rgba(0, 127, 149, 0.2);
+  outline-offset: 2px;
 }
 
 .train-card header {
+  align-items: flex-start;
   display: flex;
   justify-content: space-between;
   gap: 12px;
+}
+
+.train-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 68%;
 }
 
 .train-number {
@@ -973,6 +1007,85 @@ button {
   font-size: 0.77rem;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.secondary-badge {
+  background: #f2f6f7;
+  color: var(--muted);
+}
+
+.return-check,
+.return-panel {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  max-width: 220px;
+  border: 1px solid rgba(18, 114, 67, 0.18);
+  border-radius: 8px;
+  padding: 5px 8px;
+  background: rgba(18, 114, 67, 0.08);
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.2;
+}
+
+.return-check {
+  align-items: center;
+  min-height: 26px;
+  color: var(--good);
+  font-weight: 800;
+}
+
+.loading-return {
+  color: var(--accent-strong);
+}
+
+.no-return {
+  border-color: rgba(126, 53, 35, 0.16);
+  background: rgba(126, 53, 35, 0.06);
+  color: var(--muted);
+}
+
+.return-panel strong,
+.return-row,
+.return-row em,
+.return-row small {
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.return-panel strong {
+  color: var(--good);
+  font-size: 0.76rem;
+}
+
+.return-row {
+  display: grid;
+  justify-items: end;
+}
+
+.return-row em {
+  color: var(--good);
+  font-style: normal;
+  font-weight: 800;
+}
+
+.route-option header .return-check,
+.route-option header .return-panel {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.route-option header .return-check,
+.route-option header .return-panel strong,
+.route-option header .return-row em {
+  color: var(--good);
+}
+
+.route-option header .no-return {
+  color: var(--muted);
 }
 
 .times {
@@ -1090,6 +1203,17 @@ button {
   .map-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .route-option header,
+  .train-card header {
+    flex-direction: column;
+  }
+
+  .route-option header .route-header-actions,
+  .train-card-badges {
+    justify-content: flex-start;
+    max-width: 100%;
   }
 
   .route-map {

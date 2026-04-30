@@ -14,6 +14,25 @@ type TrainsResponse = {
   error?: string;
 };
 
+type ReturnOptionHint = {
+  arrivalTime: string;
+  date: string;
+  departureTime: string;
+  sameDay: boolean;
+  trainNo: string;
+};
+
+type ReturnLookup = {
+  error?: string;
+  options: ReturnOptionHint[];
+  status: "loading" | "ready" | "empty" | "error";
+};
+
+type ReturnOptionsResponse = {
+  returns?: ReturnOptionHint[];
+  error?: string;
+};
+
 type SuggestionsResponse = {
   origins?: string[];
   destinations?: string[];
@@ -141,6 +160,12 @@ const COPY: Record<Language, Record<string, string>> = {
     origin: "Origin",
     destination: "Destination",
     swapRoute: "Swap origin and destination",
+    returnSameDay: "Return same day",
+    returnOn: "Return",
+    checkReturns: "Check returns",
+    checkingReturns: "Checking returns...",
+    noReturnsFound: "No return found",
+    returnOptions: "Returns",
     travelDate: "Travel date",
     startSearchingFrom: "Start searching from",
     searchTrains: "Search trains",
@@ -228,6 +253,12 @@ const COPY: Record<Language, Record<string, string>> = {
     origin: "Origem",
     destination: "Destino",
     swapRoute: "Inverter origem e destino",
+    returnSameDay: "Volta no mesmo dia",
+    returnOn: "Volta",
+    checkReturns: "Ver voltas",
+    checkingReturns: "Buscando voltas...",
+    noReturnsFound: "Sem volta encontrada",
+    returnOptions: "Voltas",
     travelDate: "Data da viagem",
     startSearchingFrom: "Começar a buscar em",
     searchTrains: "Buscar trens",
@@ -315,6 +346,12 @@ const COPY: Record<Language, Record<string, string>> = {
     origin: "Départ",
     destination: "Destination",
     swapRoute: "Inverser départ et destination",
+    returnSameDay: "Retour le même jour",
+    returnOn: "Retour",
+    checkReturns: "Voir retours",
+    checkingReturns: "Recherche des retours...",
+    noReturnsFound: "Aucun retour trouvé",
+    returnOptions: "Retours",
     travelDate: "Date du voyage",
     startSearchingFrom: "Chercher à partir du",
     searchTrains: "Chercher des trains",
@@ -402,6 +439,12 @@ const COPY: Record<Language, Record<string, string>> = {
     origin: "Origen",
     destination: "Destino",
     swapRoute: "Invertir origen y destino",
+    returnSameDay: "Vuelta el mismo día",
+    returnOn: "Vuelta",
+    checkReturns: "Ver vueltas",
+    checkingReturns: "Buscando vueltas...",
+    noReturnsFound: "Sin vuelta encontrada",
+    returnOptions: "Vueltas",
     travelDate: "Fecha de viaje",
     startSearchingFrom: "Buscar desde",
     searchTrains: "Buscar trenes",
@@ -567,6 +610,7 @@ export default function Home() {
   const [reachableLegs, setReachableLegs] = useState(1);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [trains, setTrains] = useState<TrainAvailability[]>([]);
+  const [returnLookups, setReturnLookups] = useState<Record<string, ReturnLookup>>({});
   const [routes, setRoutes] = useState<RouteOption[]>([]);
   const [randomTrip, setRandomTrip] = useState<RandomTripOption | null>(null);
   const [randomTripHistory, setRandomTripHistory] = useState<string[]>([]);
@@ -638,6 +682,7 @@ export default function Home() {
     flexAbortRef.current = null;
     setSuggestions([]);
     setTrains([]);
+    setReturnLookups({});
     setRoutes([]);
     setRandomTrip(null);
     setRandomTripHistory([]);
@@ -744,6 +789,7 @@ export default function Home() {
     setStatus("loading");
     setError("");
     setSuggestions([]);
+    setReturnLookups({});
 
     if (reachableLegs) {
       await searchReachable();
@@ -768,16 +814,68 @@ export default function Home() {
       }
 
       setTrains(data.trains);
+      setReturnLookups({});
       setCheckedAt(data.checkedAt);
       setStatus(data.trains.length ? "success" : "empty");
     } catch (requestError) {
       setTrains([]);
+      setReturnLookups({});
       setError(
         requestError instanceof Error
           ? requestError.message
           : "SNCF data could not be loaded."
       );
       setStatus("error");
+    }
+  }
+
+  async function loadReturnOptions(train: TrainAvailability) {
+    const currentLookup = returnLookups[train.id];
+    if (currentLookup?.status === "loading" || currentLookup?.status === "ready") {
+      return;
+    }
+
+    setReturnLookups((current) => ({
+      ...current,
+      [train.id]: { options: [], status: "loading" }
+    }));
+
+    const params = new URLSearchParams({
+      arrivalTime: train.arrivalTime,
+      date: train.date,
+      departureTime: train.departureTime,
+      destination: train.destination,
+      origin: train.origin
+    });
+    if (nightOnly) {
+      params.set("nightOnly", "true");
+    }
+
+    try {
+      const response = await fetch(`/api/return-options?${params}`);
+      const data = (await response.json()) as ReturnOptionsResponse;
+
+      if (!response.ok) {
+        throw new Error(data.error ?? text.noReturnsFound);
+      }
+
+      const options = data.returns ?? [];
+      setReturnLookups((current) => ({
+        ...current,
+        [train.id]: {
+          options,
+          status: options.length ? "ready" : "empty"
+        }
+      }));
+    } catch (requestError) {
+      setReturnLookups((current) => ({
+        ...current,
+        [train.id]: {
+          error: requestError instanceof Error ? requestError.message : text.noReturnsFound,
+          options: [],
+          status: "error"
+        }
+      }));
     }
   }
 
@@ -1577,7 +1675,9 @@ function stopFlexibleSearch() {
               <ReachableResults
                 language={language}
                 mode={mode}
+                onCheckReturn={loadReturnOptions}
                 onSelect={setSelectedRouteId}
+                returnLookups={returnLookups}
                 routes={routes}
                 selectedRouteId={selectedRoute?.id ?? ""}
                 text={text}
@@ -1617,10 +1717,32 @@ function stopFlexibleSearch() {
                       </h4>
                       <div className="train-grid">
                         {placeGroup.trains.map((train) => (
-                          <article className="train-card" key={train.id}>
+                          <article
+                            className={returnLookups[train.id] ? "train-card return-open" : "train-card"}
+                            key={train.id}
+                            onClick={() => loadReturnOptions(train)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                loadReturnOptions(train);
+                              }
+                            }}
+                            role="button"
+                            tabIndex={0}
+                          >
                             <header>
                               <span className="train-number">Train {train.trainNo}</span>
-                              <span className="badge">MAX available</span>
+                              <div className="train-card-badges">
+                                <span className="badge">MAX available</span>
+                                <span className="badge secondary-badge">
+                                  {formatTemplate(text.legLabel, { count: "1", plural: "" })}
+                                </span>
+                                <ReturnOptionsPanel
+                                  language={language}
+                                  lookup={returnLookups[train.id]}
+                                  text={text}
+                                />
+                              </div>
                             </header>
                             <div className="times">
                               <div className="time">
@@ -1648,6 +1770,51 @@ function stopFlexibleSearch() {
         </section>
       </main>
     </div>
+  );
+}
+
+function ReturnOptionsPanel({
+  language,
+  lookup,
+  text
+}: {
+  language: Language;
+  lookup?: ReturnLookup;
+  text: Record<string, string>;
+}) {
+  if (!lookup) {
+    return <span className="return-check">{text.checkReturns}</span>;
+  }
+
+  if (lookup.status === "loading") {
+    return <span className="return-check loading-return">{text.checkingReturns}</span>;
+  }
+
+  if (lookup.status === "empty" || lookup.status === "error") {
+    return (
+      <span className="return-check no-return" title={lookup.error}>
+        {text.noReturnsFound}
+      </span>
+    );
+  }
+
+  return (
+    <span className="return-panel">
+      <strong>{text.returnOptions}</strong>
+      {lookup.options.slice(0, 3).map((option) => {
+        const label = option.sameDay
+          ? text.returnSameDay
+          : `${text.returnOn} ${formatCompactDate(option.date, language)}`;
+        const detail = `${option.departureTime} ${text.toWord} ${option.arrivalTime} - ${text.trainWord} ${option.trainNo}`;
+
+        return (
+          <span className="return-row" key={`${option.date}:${option.trainNo}:${option.departureTime}`}>
+            <em>{label}</em>
+            <small>{detail}</small>
+          </span>
+        );
+      })}
+    </span>
   );
 }
 
@@ -1706,79 +1873,103 @@ function StationInput({
 
 function RouteResults({
   language,
+  onCheckReturn,
   onSelect,
+  returnLookups,
   routes,
   selectedRouteId,
   text,
   variant = "default"
 }: {
   language: Language;
+  onCheckReturn?: (train: TrainAvailability) => void;
   onSelect: (routeId: string) => void;
+  returnLookups?: Record<string, ReturnLookup>;
   routes: RouteOption[];
   selectedRouteId: string;
   text: Record<string, string>;
   variant?: "default" | "flexible";
 }) {
+  function selectRoute(route: RouteOption) {
+    onSelect(route.id);
+    if (route.legs.length === 1 && onCheckReturn) {
+      onCheckReturn(route.legs[0]);
+    }
+  }
+
   return (
     <div className="route-results">
-      {routes.map((route) => (
-        <article
-          className={route.id === selectedRouteId ? "route-option selected" : "route-option"}
-          key={route.id}
-          onClick={() => onSelect(route.id)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              onSelect(route.id);
-            }
-          }}
-          role="button"
-          tabIndex={0}
-        >
-          <header>
-            <div>
-              <strong>
-                {route.type === "direct"
-                  ? text.directTrain
-                  : variant === "flexible"
-                    ? formatTemplate(text.bruteRoute, {
-                        count: String(routeTravelDays(route)),
-                        plural: routeTravelDays(route) === 1 ? "" : "s"
-                      })
-                    : text.connectionFound}
-              </strong>
-              <span>
-                {formatDuration(route.durationMinutes)}
-                {route.waitMinutes
-                  ? formatTemplate(text.includingWaiting, { duration: formatDuration(route.waitMinutes) })
-                  : ""}
-              </span>
-            </div>
-            <span className="badge">
-              {formatTemplate(text.legLabel, {
-                count: String(route.legs.length),
-                plural: route.legs.length === 1 ? "" : "s"
-              })}
-            </span>
-          </header>
-          <div className="route-legs">
-            {route.legs.map((leg, index) => (
-              <div className="route-leg" key={leg.id}>
-                <span className="leg-index">{index + 1}</span>
-                <div>
-                  <strong>
-                    {leg.origin} {"->"} {leg.destination}
-                  </strong>
-                  <span>
-                    {formatDate(leg.date, language)} · {leg.departureTime} {text.toWord} {leg.arrivalTime} · {text.trainWord}{" "}
-                    {leg.trainNo}
-                  </span>
-                </div>
+      {routes.map((route) => {
+        const directLeg = route.legs.length === 1 ? route.legs[0] : null;
+
+        return (
+          <article
+            className={route.id === selectedRouteId ? "route-option selected" : "route-option"}
+            key={route.id}
+            onClick={() => selectRoute(route)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                selectRoute(route);
+              }
+            }}
+            role="button"
+            tabIndex={0}
+          >
+            <header>
+              <div>
+                <strong>
+                  {route.type === "direct"
+                    ? text.directTrain
+                    : variant === "flexible"
+                      ? formatTemplate(text.bruteRoute, {
+                          count: String(routeTravelDays(route)),
+                          plural: routeTravelDays(route) === 1 ? "" : "s"
+                        })
+                      : text.connectionFound}
+                </strong>
+                <span>
+                  {formatDuration(route.durationMinutes)}
+                  {route.waitMinutes
+                    ? formatTemplate(text.includingWaiting, { duration: formatDuration(route.waitMinutes) })
+                    : ""}
+                </span>
               </div>
-            ))}
-          </div>
-        </article>
-      ))}
+              <div className="route-header-actions">
+                <span className="badge">
+                  {formatTemplate(text.legLabel, {
+                    count: String(route.legs.length),
+                    plural: route.legs.length === 1 ? "" : "s"
+                  })}
+                </span>
+                {directLeg && onCheckReturn ? (
+                  <ReturnOptionsPanel
+                    language={language}
+                    lookup={returnLookups?.[directLeg.id]}
+                    text={text}
+                  />
+                ) : null}
+              </div>
+            </header>
+            <div className="route-legs">
+              {route.legs.map((leg, index) => (
+                <div className="route-leg" key={leg.id}>
+                  <span className="leg-index">{index + 1}</span>
+                  <div>
+                    <strong>
+                      {leg.origin} {"->"} {leg.destination}
+                    </strong>
+                    <span>
+                      {formatDate(leg.date, language)} · {leg.departureTime} {text.toWord} {leg.arrivalTime} · {text.trainWord}{" "}
+                      {leg.trainNo}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 }
@@ -1885,14 +2076,18 @@ function RandomTripResult({
 function ReachableResults({
   language,
   mode,
+  onCheckReturn,
   onSelect,
+  returnLookups,
   routes,
   selectedRouteId,
   text
 }: {
   language: Language;
   mode: SearchMode;
+  onCheckReturn: (train: TrainAvailability) => void;
   onSelect: (routeId: string) => void;
+  returnLookups: Record<string, ReturnLookup>;
   routes: RouteOption[];
   selectedRouteId: string;
   text: Record<string, string>;
@@ -1909,7 +2104,9 @@ function ReachableResults({
           </div>
           <RouteResults
             language={language}
+            onCheckReturn={onCheckReturn}
             onSelect={onSelect}
+            returnLookups={returnLookups}
             routes={group.routes}
             selectedRouteId={selectedRouteId}
             text={text}
@@ -2508,6 +2705,14 @@ function stationCityKey(name: string) {
     return words.slice(0, end).join(" ");
   }
 
+  if (["LE", "LA", "LES"].includes(words[0] ?? "") && words[1]) {
+    return words.slice(0, 2).join(" ");
+  }
+
+  if ((words[0] ?? "").startsWith("L'") && words[0].length > 2) {
+    return words[0];
+  }
+
   return words[0] ?? "";
 }
 
@@ -2802,6 +3007,13 @@ function formatDate(value: string, language: Language) {
     month: "short",
     day: "numeric",
     year: "numeric"
+  }).format(new Date(`${value}T12:00:00`));
+}
+
+function formatCompactDate(value: string, language: Language) {
+  return new Intl.DateTimeFormat(languageLocale(language), {
+    month: "short",
+    day: "numeric"
   }).format(new Date(`${value}T12:00:00`));
 }
 
