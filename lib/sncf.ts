@@ -18,6 +18,7 @@ const SELECT_FIELDS = [
 ].join(",");
 
 const PAGE_SIZE = 100;
+const MIN_RANDOM_TRANSFER_MINUTES = 45;
 
 export type RawTgvmaxRecord = Partial<{
   date: string;
@@ -496,7 +497,7 @@ export async function findRandomTrip({
   const targetCityCounts = randomCityCount
     ? randomCityTargets(maxCitiesForWindow)
     : [Math.max(1, Math.min(maxCitiesForWindow, cityCount))];
-  const attempts = randomCityCount ? 80 : 50;
+  const attempts = randomCityCount ? 30 : 24;
   const excludedTrips = new Set(excludeTripIds);
   const excludedCityKeys = new Set(excludeCities.map(cityKey));
   const candidates: RandomTripOption[] = [];
@@ -617,13 +618,19 @@ function buildRandomTripAttempt(
     const candidates = records
       .filter((train) => {
         const destinationKey = cityKey(train.destination);
+        const depart = departureMinute(train);
+        const hasEnoughStay =
+          stopIndex === 0 ||
+          (depart >= currentMinute + MIN_RANDOM_TRANSFER_MINUTES &&
+            usableStayMinutes(currentMinute, depart) >= minStayMinutes);
         return (
           sameCity(train.origin, currentPlace) &&
           !sameCity(train.destination, origin) &&
           !visitedCities.has(destinationKey) &&
           !excludedCityKeys.has(destinationKey) &&
           (!avoidAirports || !isAirportStation(train.destination)) &&
-          departureMinute(train) >= currentMinute &&
+          depart >= currentMinute &&
+          hasEnoughStay &&
           arrivalMinute(train) <= latestArrival
         );
       })
@@ -642,16 +649,18 @@ function buildRandomTripAttempt(
       stayMinutes: 0
     });
     currentPlace = nextLeg.destination;
-    currentMinute = arrivalMinute(nextLeg) + minStayMinutes;
+    currentMinute = arrivalMinute(nextLeg);
   }
 
   const returnCandidates = records
     .filter((train) => {
+      const depart = departureMinute(train);
       return (
         sameCity(train.origin, currentPlace) &&
         stationMatches(train.destination, origin) &&
         (!forceReturnDate || minuteToDate(arrivalMinute(train)) === forceReturnDate) &&
-        departureMinute(train) >= currentMinute &&
+        depart >= currentMinute + MIN_RANDOM_TRANSFER_MINUTES &&
+        usableStayMinutes(currentMinute, depart) >= minStayMinutes &&
         arrivalMinute(train) <= endMinute
       );
     })
@@ -672,7 +681,7 @@ function buildRandomTripAttempt(
     const nextLeg = legs[index + 1];
     return {
       ...stop,
-      stayMinutes: nextLeg ? Math.max(0, departureMinute(nextLeg) - arrivalMinute(stop.arrivalLeg)) : 0
+      stayMinutes: nextLeg ? usableStayMinutes(arrivalMinute(stop.arrivalLeg), departureMinute(nextLeg)) : 0
     };
   });
   const totalStayMinutes = stopsWithStay.reduce((sum, stop) => sum + stop.stayMinutes, 0);
@@ -733,13 +742,15 @@ function findTwoCityRandomTrips(
   for (const firstLeg of firstLegs) {
     const secondLegs = records
       .filter((train) => {
+        const depart = departureMinute(train);
         return (
           sameCity(train.origin, firstLeg.destination) &&
           !sameCity(train.destination, origin) &&
           !sameCity(train.destination, firstLeg.destination) &&
           !excludedCityKeys.has(cityKey(train.destination)) &&
           (!avoidAirports || !isAirportStation(train.destination)) &&
-          departureMinute(train) >= arrivalMinute(firstLeg) + minStayMinutes &&
+          depart >= arrivalMinute(firstLeg) + MIN_RANDOM_TRANSFER_MINUTES &&
+          usableStayMinutes(arrivalMinute(firstLeg), depart) >= minStayMinutes &&
           arrivalMinute(train) <= endMinute
         );
       })
@@ -749,11 +760,13 @@ function findTwoCityRandomTrips(
     for (const secondLeg of secondLegs) {
       const returnLegs = records
         .filter((train) => {
+          const depart = departureMinute(train);
           return (
             sameCity(train.origin, secondLeg.destination) &&
             stationMatches(train.destination, origin) &&
             (!forceReturnDate || minuteToDate(arrivalMinute(train)) === forceReturnDate) &&
-            departureMinute(train) >= arrivalMinute(secondLeg) + minStayMinutes &&
+            depart >= arrivalMinute(secondLeg) + MIN_RANDOM_TRANSFER_MINUTES &&
+            usableStayMinutes(arrivalMinute(secondLeg), depart) >= minStayMinutes &&
             arrivalMinute(train) <= endMinute
           );
         })
@@ -802,7 +815,7 @@ function findLoopRandomTrips(
 ) {
   const startMinute = dateTimeInputToMinute(startAt);
   const endMinute = dateTimeInputToMinute(endAt);
-  const maxBranch = targetCities <= 2 ? 90 : 42;
+  const maxBranch = targetCities <= 2 ? 60 : 24;
   type PartialLoop = {
     currentPlace: string;
     legs: TrainAvailability[];
@@ -827,13 +840,19 @@ function findLoopRandomTrips(
       const options = records
         .filter((train) => {
           const destinationKey = cityKey(train.destination);
+          const depart = departureMinute(train);
+          const hasEnoughStay =
+            partial.legs.length === 0 ||
+            (depart >= partial.minute + MIN_RANDOM_TRANSFER_MINUTES &&
+              usableStayMinutes(partial.minute, depart) >= minStayMinutes);
           return (
             (partial.legs.length ? sameCity(train.origin, partial.currentPlace) : stationMatches(train.origin, origin)) &&
             !sameCity(train.destination, origin) &&
             !partial.visited.has(destinationKey) &&
             !excludedCityKeys.has(destinationKey) &&
             (!avoidAirports || !isAirportStation(train.destination)) &&
-            departureMinute(train) >= partial.minute &&
+            depart >= partial.minute &&
+            hasEnoughStay &&
             arrivalMinute(train) <= endMinute - minStayMinutes
           );
         })
@@ -846,7 +865,7 @@ function findLoopRandomTrips(
         expanded.push({
           currentPlace: leg.destination,
           legs: [...partial.legs, leg],
-          minute: arrivalMinute(leg) + minStayMinutes,
+          minute: arrivalMinute(leg),
           score: partial.score + scoreLoopLeg(leg, partial.minute, endMinute, depth),
           visited
         });
@@ -855,7 +874,7 @@ function findLoopRandomTrips(
 
     partials = expanded
       .sort((a, b) => b.score - a.score + Math.random() * 80 - 40)
-      .slice(0, targetCities <= 2 ? 180 : 90);
+      .slice(0, targetCities <= 2 ? 110 : 48);
 
     if (!partials.length) {
       return [];
@@ -867,15 +886,17 @@ function findLoopRandomTrips(
   for (const partial of partials) {
     const returnOptions = records
       .filter((train) => {
+        const depart = departureMinute(train);
         return (
           sameCity(train.origin, partial.currentPlace) &&
           stationMatches(train.destination, origin) &&
-          departureMinute(train) >= partial.minute &&
+          depart >= partial.minute + MIN_RANDOM_TRANSFER_MINUTES &&
+          usableStayMinutes(partial.minute, depart) >= minStayMinutes &&
           arrivalMinute(train) <= endMinute
         );
       })
       .sort((a, b) => scoreReturnRandomLeg(b, endMinute) - scoreReturnRandomLeg(a, endMinute))
-      .slice(0, 12);
+      .slice(0, 8);
 
     for (const returnLeg of returnOptions) {
       trips.push(
@@ -920,7 +941,7 @@ function randomTripFromLegs({
     return {
       city: stationCityLabel(leg.destination),
       arrivalLeg: leg,
-      stayMinutes: nextLeg ? Math.max(0, departureMinute(nextLeg) - arrivalMinute(leg)) : 0
+      stayMinutes: nextLeg ? usableStayMinutes(arrivalMinute(leg), departureMinute(nextLeg)) : 0
     };
   });
 
@@ -1563,7 +1584,7 @@ function isAirportStation(station: string) {
 }
 
 function randomCityTargets(maxCitiesForWindow: number) {
-  const maxCities = Math.min(5, Math.max(1, maxCitiesForWindow));
+  const maxCities = Math.min(4, Math.max(1, maxCitiesForWindow));
   const minCities = maxCitiesForWindow >= 2 ? 2 : 1;
   const targets: number[] = [];
 
@@ -1596,6 +1617,24 @@ function arrivalMinute(train: TrainAvailability) {
     timeToMinutes(train.arrivalTime) +
     (arrivesNextDay(train) ? 1440 : 0)
   );
+}
+
+function usableStayMinutes(arrival: number, departure: number) {
+  if (departure <= arrival) {
+    return 0;
+  }
+
+  let total = 0;
+  const firstDay = Math.floor(arrival / 1440);
+  const lastDay = Math.floor((departure - 1) / 1440);
+
+  for (let day = firstDay; day <= lastDay; day += 1) {
+    const usableStart = day * 1440 + 360;
+    const usableEnd = day * 1440 + 1380;
+    total += Math.max(0, Math.min(departure, usableEnd) - Math.max(arrival, usableStart));
+  }
+
+  return total;
 }
 
 function dateIndex(date: string) {
@@ -1801,6 +1840,18 @@ function stationCityLabel(value: string) {
 
   if (upper.startsWith("SAINT ETIENNE") || upper.startsWith("ST ETIENNE")) {
     return "SAINT ETIENNE";
+  }
+
+  const words = upper.replace(/^ST\s+/, "SAINT ").split(" ").filter(Boolean);
+  if (words[0] === "SAINT" && words[1]) {
+    let end = 2;
+    const linkWords = new Set(["DE", "DES", "DU", "EN", "SUR", "SOUS", "LE", "LA", "LES"]);
+
+    while (end < words.length && linkWords.has(words[end])) {
+      end = Math.min(words.length, end + 2);
+    }
+
+    return words.slice(0, end).join(" ");
   }
 
   return cleaned.split(" ")[0] ?? cleaned;

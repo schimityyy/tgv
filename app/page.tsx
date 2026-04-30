@@ -140,6 +140,7 @@ const COPY: Record<Language, Record<string, string>> = {
     arrivalStation: "Arrival station",
     origin: "Origin",
     destination: "Destination",
+    swapRoute: "Swap origin and destination",
     travelDate: "Travel date",
     startSearchingFrom: "Start searching from",
     searchTrains: "Search trains",
@@ -226,6 +227,7 @@ const COPY: Record<Language, Record<string, string>> = {
     arrivalStation: "Estação de chegada",
     origin: "Origem",
     destination: "Destino",
+    swapRoute: "Inverter origem e destino",
     travelDate: "Data da viagem",
     startSearchingFrom: "Começar a buscar em",
     searchTrains: "Buscar trens",
@@ -312,6 +314,7 @@ const COPY: Record<Language, Record<string, string>> = {
     arrivalStation: "Gare d'arrivée",
     origin: "Départ",
     destination: "Destination",
+    swapRoute: "Inverser départ et destination",
     travelDate: "Date du voyage",
     startSearchingFrom: "Chercher à partir du",
     searchTrains: "Chercher des trains",
@@ -398,6 +401,7 @@ const COPY: Record<Language, Record<string, string>> = {
     arrivalStation: "Estación de llegada",
     origin: "Origen",
     destination: "Destino",
+    swapRoute: "Invertir origen y destino",
     travelDate: "Fecha de viaje",
     startSearchingFrom: "Buscar desde",
     searchTrains: "Buscar trenes",
@@ -499,6 +503,11 @@ const CITY_COORDS: Record<string, { lat: number; lon: number }> = {
   RENNES: { lat: 48.1173, lon: -1.6778 },
   "ROISSY": { lat: 49.0097, lon: 2.5479 },
   "SAINT ETIENNE": { lat: 45.4397, lon: 4.3872 },
+  "SAINT BRIEUC": { lat: 48.5142, lon: -2.7658 },
+  "SAINT MALO": { lat: 48.6493, lon: -2.0257 },
+  "SAINT NAZAIRE": { lat: 47.2735, lon: -2.2138 },
+  "SAINT PIERRE DES CORPS": { lat: 47.3862, lon: 0.7233 },
+  "SAINT RAPHAEL": { lat: 43.4233, lon: 6.7684 },
   STRASBOURG: { lat: 48.5734, lon: 7.7521 },
   TOULON: { lat: 43.1242, lon: 5.928 },
   TOULOUSE: { lat: 43.6047, lon: 1.4442 },
@@ -611,6 +620,17 @@ export default function Home() {
   function changeLanguage(nextLanguage: Language) {
     setLanguage(nextLanguage);
     window.localStorage.setItem("tgvmax-language", nextLanguage);
+  }
+
+  function swapRouteEndpoints() {
+    setRouteOrigin(routeDestination);
+    setRouteDestination(routeOrigin);
+    setRouteOriginSuggestions([]);
+    setRouteDestinationSuggestions([]);
+    setRoutes([]);
+    setSelectedRouteId("");
+    setStatus("idle");
+    setError("");
   }
 
   useEffect(() => {
@@ -1008,11 +1028,10 @@ function stopFlexibleSearch() {
 
     try {
       const response = await fetch(`/api/random-route?${params}`);
-      const data = (await response.json()) as RandomTripResponse;
-
-      if (!response.ok) {
-        throw new Error(data.error ?? "Random trip could not be generated.");
-      }
+      const data = await readJsonResponse<RandomTripResponse>(
+        response,
+        "Random trip could not be generated."
+      );
 
       const generatedTrip = data.trip;
       setRandomTrip(generatedTrip);
@@ -1230,6 +1249,15 @@ function stopFlexibleSearch() {
                 suggestions={routeOriginSuggestions}
                 value={routeOrigin}
               />
+              <button
+                aria-label={text.swapRoute}
+                className="swap-route-button"
+                onClick={swapRouteEndpoints}
+                title={text.swapRoute}
+                type="button"
+              >
+                {"\u21c4"}
+              </button>
               <StationInput
                 id="route-destination"
                 label={text.destination}
@@ -1273,6 +1301,15 @@ function stopFlexibleSearch() {
                 suggestions={routeOriginSuggestions}
                 value={routeOrigin}
               />
+              <button
+                aria-label={text.swapRoute}
+                className="swap-route-button"
+                onClick={swapRouteEndpoints}
+                title={text.swapRoute}
+                type="button"
+              >
+                {"\u21c4"}
+              </button>
               <StationInput
                 id="flex-destination"
                 label={text.destination}
@@ -1920,6 +1957,7 @@ function RouteMap({ route }: { route: RouteOption }) {
           const position = projectPoint(point);
           return (
             <g key={`${point.order}:${point.place}`} transform={`translate(${position.x} ${position.y})`}>
+              <title>{point.name}</title>
               <circle className={mapPointClass(point)} r={point.kind === "focus" ? 10 : 11} />
               <text className="marker-label" dy="4">{point.marker}</text>
             </g>
@@ -1970,6 +2008,7 @@ function RandomTripMap({ trip }: { trip: RandomTripOption }) {
           const position = projectPoint(point);
           return (
             <g key={`${point.order}:${point.place}`} transform={`translate(${position.x} ${position.y})`}>
+              <title>{point.name}</title>
               <circle className={mapPointClass(point)} r={point.kind === "focus" ? 10 : 11} />
               <text className="marker-label" dy="4">{point.marker}</text>
             </g>
@@ -2037,6 +2076,7 @@ function ReachableMap({
               tabIndex={canJump ? 0 : undefined}
               transform={`translate(${position.x} ${position.y})`}
             >
+              <title>{point.name}</title>
               <circle className={mapPointClass(point)} r={radius} />
               <text className="marker-label" dy="4">{point.marker}</text>
             </g>
@@ -2135,6 +2175,7 @@ function AvailabilityMap({ points, mode }: { points: MapPoint[]; mode: SearchMod
               tabIndex={canJump ? 0 : undefined}
               transform={`translate(${position.x} ${position.y})`}
             >
+              <title>{point.name}</title>
               <circle className={mapPointClass(point)} r={radius} />
               <text className="marker-label" dy="4">{point.marker}</text>
             </g>
@@ -2451,7 +2492,23 @@ function stationCityKey(name: string) {
     .sort((a, b) => b.length - a.length)
     .find((city) => normalized === city || normalized.startsWith(`${city} `));
 
-  return exactOrPrefix ?? (normalized.split(" ")[0] ?? "");
+  if (exactOrPrefix) {
+    return exactOrPrefix;
+  }
+
+  const words = normalized.split(" ").filter(Boolean);
+  if (words[0] === "SAINT" && words[1]) {
+    let end = 2;
+    const linkWords = new Set(["DE", "DES", "DU", "EN", "SUR", "SOUS", "LE", "LA", "LES"]);
+
+    while (end < words.length && linkWords.has(words[end])) {
+      end = Math.min(words.length, end + 2);
+    }
+
+    return words.slice(0, end).join(" ");
+  }
+
+  return words[0] ?? "";
 }
 
 function shortStationName(name: string) {
@@ -2720,6 +2777,23 @@ async function loadRouteSuggestions(
   } catch {
     setter([]);
   }
+}
+
+async function readJsonResponse<T extends { error?: string }>(response: Response, fallbackMessage: string) {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (!contentType.includes("application/json")) {
+    await response.text().catch(() => "");
+    const status = response.status ? ` (${response.status})` : "";
+    throw new Error(`${fallbackMessage}${status}`);
+  }
+
+  const data = (await response.json()) as T;
+  if (!response.ok) {
+    throw new Error(data.error ?? fallbackMessage);
+  }
+
+  return data;
 }
 
 function formatDate(value: string, language: Language) {

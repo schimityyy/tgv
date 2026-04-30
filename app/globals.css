@@ -231,14 +231,14 @@ button {
 
 .route-form {
   display: grid;
-  grid-template-columns: repeat(2, minmax(220px, 1fr)) minmax(150px, 190px) auto;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(220px, 1fr) minmax(150px, 190px) auto;
   gap: 12px;
   align-items: end;
 }
 
 .flexible-form {
   display: grid;
-  grid-template-columns: repeat(2, minmax(220px, 1fr)) minmax(170px, 210px) auto;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(220px, 1fr) minmax(170px, 210px) auto;
   gap: 12px;
   align-items: end;
 }
@@ -323,6 +323,24 @@ button {
 
 .random-count-field {
   min-width: 130px;
+}
+
+.swap-route-button {
+  display: grid;
+  width: 42px;
+  min-height: 42px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--accent-strong);
+  font-size: 1.05rem;
+  font-weight: 900;
+}
+
+.swap-route-button:hover {
+  border-color: var(--accent);
+  background: #eef8f9;
 }
 
 .warning-card {
@@ -1053,6 +1071,10 @@ button {
   }
 
   .primary-button {
+    width: 100%;
+  }
+
+  .swap-route-button {
     width: 100%;
   }
 
