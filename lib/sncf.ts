@@ -18,8 +18,6 @@ const SELECT_FIELDS = [
 ].join(",");
 
 const PAGE_SIZE = 100;
-const LARGE_PAGE_SIZE = 1000;
-const RANDOM_MAX_RECORDS = 2200;
 const MIN_RANDOM_TRANSFER_MINUTES = 45;
 
 export type RawTgvmaxRecord = Partial<{
@@ -492,10 +490,7 @@ export async function findRandomTrip({
   const startDate = startAt.slice(0, 10);
   const endDate = endAt.slice(0, 10);
   const maxCitiesForWindow = Math.max(1, dateIndex(endDate) - dateIndex(startDate) + 1);
-  const data = await fetchAvailableTrainsBetweenDates(startDate, endDate, {
-    maxRecords: RANDOM_MAX_RECORDS,
-    pageSize: LARGE_PAGE_SIZE
-  });
+  const data = await fetchRandomTripRecords(origin, startDate, endDate);
   const records = data.records
     .filter((train) => departureMinute(train) >= startMinute && arrivalMinute(train) <= endMinute)
     .sort((a, b) => departureMinute(a) - departureMinute(b));
@@ -1185,7 +1180,7 @@ export function stationMatches(station: string, query: string) {
 async function fetchAvailableTrainsBetweenDates(
   startDate: string,
   endDate: string,
-  options?: { maxRecords?: number; pageSize?: number }
+  options?: { maxRecords?: number }
 ): Promise<TgvmaxPayload> {
   const where = [
     availableWhereClause(),
@@ -1195,14 +1190,13 @@ async function fetchAvailableTrainsBetweenDates(
   const allResults: RawTgvmaxRecord[] = [];
   let totalCount = 0;
   let offset = 0;
-  const pageSize = options?.pageSize ?? PAGE_SIZE;
   const maxRecords = options?.maxRecords ?? 5000;
 
   do {
     const page = await requestSncfRecords({
       select: SELECT_FIELDS,
       where: where.join(" and "),
-      limit: pageSize,
+      limit: PAGE_SIZE,
       offset,
       orderBy: "date asc, heure_depart asc"
     });
@@ -1212,7 +1206,7 @@ async function fetchAvailableTrainsBetweenDates(
     totalCount = page.total_count ?? allResults.length;
     offset += results.length;
 
-    if (!results.length || results.length < Math.min(pageSize, PAGE_SIZE)) {
+    if (!results.length || results.length < PAGE_SIZE) {
       break;
     }
   } while (offset < totalCount && allResults.length < maxRecords);
@@ -1221,6 +1215,92 @@ async function fetchAvailableTrainsBetweenDates(
     total_count: totalCount,
     results: allResults.slice(0, maxRecords)
   });
+}
+
+async function fetchRandomTripRecords(origin: string, startDate: string, endDate: string) {
+  const dateWindow = [
+    availableWhereClause(),
+    `date >= date'${startDate}'`,
+    `date <= date'${endDate}'`
+  ].join(" and ");
+  const [outboundPage, inboundPage] = await Promise.all([
+    requestSncfRecords({
+      select: SELECT_FIELDS,
+      where: `${dateWindow} and ${originWhereClause(origin)}`,
+      limit: PAGE_SIZE,
+      orderBy: "date asc, heure_depart asc"
+    }),
+    requestSncfRecords({
+      select: SELECT_FIELDS,
+      where: `${dateWindow} and ${destinationWhereClause(origin)}`,
+      limit: PAGE_SIZE,
+      orderBy: "date asc, heure_depart asc"
+    })
+  ]);
+  const baseResults = [...(outboundPage.results ?? []), ...(inboundPage.results ?? [])];
+  const baseRecords = normalizeTgvmaxResponse({ total_count: baseResults.length, results: baseResults }).records;
+  const candidateCities = randomCandidateCities(baseRecords, origin);
+  let middleResults: RawTgvmaxRecord[] = [];
+
+  if (candidateCities.length) {
+    const originClauses = candidateCities
+      .slice(0, 14)
+      .map((city) => `search(origine, ${odsString(city)})`)
+      .join(" or ");
+    const middlePage = await requestSncfRecords({
+      select: SELECT_FIELDS,
+      where: `${dateWindow} and (${originClauses})`,
+      limit: PAGE_SIZE,
+      orderBy: "date asc, heure_depart asc"
+    });
+    middleResults = middlePage.results ?? [];
+  }
+
+  const results = dedupeRawRecords([...baseResults, ...middleResults]);
+
+  return normalizeTgvmaxResponse({
+    total_count: results.length,
+    results
+  });
+}
+
+function randomCandidateCities(records: TrainAvailability[], origin: string) {
+  const originKey = cityKey(origin);
+  const scores = new Map<string, { city: string; score: number }>();
+
+  for (const record of records) {
+    for (const station of [record.origin, record.destination]) {
+      const key = cityKey(station);
+      if (!key || key === originKey || isAirportStation(station)) {
+        continue;
+      }
+
+      const current = scores.get(key) ?? { city: stationCityLabel(station), score: 0 };
+      current.score += sameCity(record.origin, origin) || stationMatches(record.destination, origin) ? 2 : 1;
+      scores.set(key, current);
+    }
+  }
+
+  return [...scores.values()]
+    .sort((a, b) => b.score - a.score + Math.random() * 0.8 - 0.4)
+    .map((item) => item.city);
+}
+
+function dedupeRawRecords(records: RawTgvmaxRecord[]) {
+  return Array.from(
+    new Map(
+      records.map((record) => [
+        [
+          toText(record.date),
+          toText(record.train_no),
+          toText(record.origine),
+          toText(record.destination),
+          toText(record.heure_depart)
+        ].join("|"),
+        record
+      ])
+    ).values()
+  );
 }
 
 function findRoutesByLegCount(
