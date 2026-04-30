@@ -18,6 +18,8 @@ const SELECT_FIELDS = [
 ].join(",");
 
 const PAGE_SIZE = 100;
+const LARGE_PAGE_SIZE = 1000;
+const RANDOM_MAX_RECORDS = 2200;
 const MIN_RANDOM_TRANSFER_MINUTES = 45;
 
 export type RawTgvmaxRecord = Partial<{
@@ -490,7 +492,10 @@ export async function findRandomTrip({
   const startDate = startAt.slice(0, 10);
   const endDate = endAt.slice(0, 10);
   const maxCitiesForWindow = Math.max(1, dateIndex(endDate) - dateIndex(startDate) + 1);
-  const data = await fetchAvailableTrainsBetweenDates(startDate, endDate);
+  const data = await fetchAvailableTrainsBetweenDates(startDate, endDate, {
+    maxRecords: RANDOM_MAX_RECORDS,
+    pageSize: LARGE_PAGE_SIZE
+  });
   const records = data.records
     .filter((train) => departureMinute(train) >= startMinute && arrivalMinute(train) <= endMinute)
     .sort((a, b) => departureMinute(a) - departureMinute(b));
@@ -1179,7 +1184,8 @@ export function stationMatches(station: string, query: string) {
 
 async function fetchAvailableTrainsBetweenDates(
   startDate: string,
-  endDate: string
+  endDate: string,
+  options?: { maxRecords?: number; pageSize?: number }
 ): Promise<TgvmaxPayload> {
   const where = [
     availableWhereClause(),
@@ -1189,12 +1195,14 @@ async function fetchAvailableTrainsBetweenDates(
   const allResults: RawTgvmaxRecord[] = [];
   let totalCount = 0;
   let offset = 0;
+  const pageSize = options?.pageSize ?? PAGE_SIZE;
+  const maxRecords = options?.maxRecords ?? 5000;
 
   do {
     const page = await requestSncfRecords({
       select: SELECT_FIELDS,
       where: where.join(" and "),
-      limit: PAGE_SIZE,
+      limit: pageSize,
       offset,
       orderBy: "date asc, heure_depart asc"
     });
@@ -1202,16 +1210,16 @@ async function fetchAvailableTrainsBetweenDates(
 
     allResults.push(...results);
     totalCount = page.total_count ?? allResults.length;
-    offset += PAGE_SIZE;
+    offset += results.length;
 
-    if (results.length < PAGE_SIZE) {
+    if (!results.length || results.length < Math.min(pageSize, PAGE_SIZE)) {
       break;
     }
-  } while (offset < totalCount && offset < 5000);
+  } while (offset < totalCount && allResults.length < maxRecords);
 
   return normalizeTgvmaxResponse({
     total_count: totalCount,
-    results: allResults
+    results: allResults.slice(0, maxRecords)
   });
 }
 

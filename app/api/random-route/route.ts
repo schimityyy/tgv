@@ -3,7 +3,7 @@ import { findRandomTrip } from "@/lib/sncf";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 export async function GET(request: Request) {
   try {
