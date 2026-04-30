@@ -1,10 +1,11 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import type { RouteOption, TrainAvailability } from "@/lib/sncf";
+import type { RandomTripOption, RouteOption, TrainAvailability } from "@/lib/sncf";
 
-type SearchMode = "outbound" | "inbound" | "route" | "flexible";
+type SearchMode = "outbound" | "inbound" | "route" | "flexible" | "random";
 type Status = "idle" | "loading" | "success" | "empty" | "error";
+type Language = "en" | "pt" | "fr" | "es";
 
 type TrainsResponse = {
   trains: TrainAvailability[];
@@ -27,6 +28,14 @@ type RoutesResponse = {
   searchedTo: string;
   error?: string;
 };
+
+type RandomTripResponse = {
+  trip: RandomTripOption | null;
+  checkedAt: string;
+  error?: string;
+};
+
+type RandomCityMode = "fixed" | "surprise";
 
 type FlexibleRouteEvent =
   | {
@@ -97,6 +106,360 @@ type LabeledPoint<T extends MapPoint = MapPoint> = T & {
 type ReachableCityGroup = {
   city: string;
   routes: RouteOption[];
+};
+
+const LANGUAGES: Array<{ code: Language; label: string }> = [
+  { code: "en", label: "English" },
+  { code: "pt", label: "Português" },
+  { code: "fr", label: "Français" },
+  { code: "es", label: "Español" }
+];
+
+const COPY: Record<Language, Record<string, string>> = {
+  en: {
+    brandSubtitle: "Available MAX JEUNE and MAX SENIOR seats from SNCF Open Data.",
+    refresh: "Refresh SNCF data",
+    refreshing: "Refreshing...",
+    language: "Language",
+    fromTab: "From",
+    toTab: "To",
+    routeTab: "Route",
+    flexibleTab: "Flexible",
+    randomTab: "Random",
+    outboundTitle: "Find free MAX trains from your station.",
+    inboundTitle: "Find free MAX trains arriving at your station.",
+    routeTitle: "Go from one city to another on one date.",
+    flexibleTitle: "Brute-force a flexible MAX route.",
+    randomTitle: "Generate a surprise round trip.",
+    outboundIntro: "Pick an origin and see every available destination.",
+    inboundIntro: "Pick an arrival city and see every available departure city.",
+    routeIntro: "Search direct trains and same-day connections for the exact date you choose.",
+    flexibleIntro: "Pick what you can accept, then the app scans forward from your date and stops on the first departure day with good routes.",
+    randomIntro: "Choose a start, an end, and how much surprise you want. The app builds a loop that comes back home.",
+    originStation: "Origin station",
+    arrivalStation: "Arrival station",
+    origin: "Origin",
+    destination: "Destination",
+    travelDate: "Travel date",
+    startSearchingFrom: "Start searching from",
+    searchTrains: "Search trains",
+    searching: "Searching...",
+    findRoute: "Find route",
+    startBruteForce: "Start brute force",
+    numberOfTrains: "Number of trains",
+    tripCanLast: "Trip can last",
+    flexibleWarning: "This is a brute-force search. It can take a while, but it stops when it finds the first departure day with routes and only shows the best arrivals for that day.",
+    nightOnly: "Night Intercites only",
+    map: "Map",
+    ready: "Ready to search.",
+    lastChecked: "Last checked",
+    rollingWindow: "Rolling SNCF availability window: 30 days.",
+    bookingNotice: "This availability helper is not a booking service. Always confirm the seat on SNCF Connect before planning your trip.",
+    startOutbound: "Start with an origin station.",
+    startInbound: "Start with an arrival station.",
+    startRoute: "Start with an origin, destination, and date.",
+    startFlexible: "Start with a route and the limits you can accept.",
+    suggestionHint: "Try official names or city-wide options such as PARIS (all stations).",
+    loadingSncf: "Searching SNCF availability...",
+    loadingSncfDetail: "Checking the current MAX dataset for matching trains.",
+    noAvailable: "No available MAX trains found.",
+    routeEmpty: "No route was found with up to {count} legs on the selected date.",
+    flexibleEmpty: "The brute-force scan finished without finding a route inside the selected limits.",
+    reachableEmpty: "No reachable city was found with up to 3 legs for this date.",
+    trainEmpty: "SNCF Open Data has no available MAX seats for this search.",
+    routeFlexibleHint: " Try the Flexible tab if you want the app to search later days and longer paths.",
+    dataError: "SNCF data could not be loaded.",
+    retryRefresh: "Please retry or refresh the SNCF data.",
+    flexibleRunning: "Brute-force search running...",
+    flexibleFinished: "Brute-force search finished.",
+    waitingScan: "Waiting for the scan to start.",
+    preparingWindow: "Preparing the SNCF availability window...",
+    dailyScan: "Starting the daily brute-force scan.",
+    searchComplete: "Search complete.",
+    searchStopped: "Search stopped.",
+    stop: "Stop",
+    routesFound: "{count} route{plural} found",
+    trainsLoaded: "{count} trains loaded",
+    foundStopping: "Found {count} option{plural}. Stopping on this departure day.",
+    directTrain: "Direct train",
+    connectionFound: "Connection found",
+    bruteRoute: "{count} day brute-force route",
+    legLabel: "{count} leg{plural}",
+    includingWaiting: ", including {duration} waiting",
+    toWord: "to",
+    trainWord: "Train",
+    randomStart: "Leave after",
+    randomEnd: "Be back before",
+    citiesToVisit: "Cities to visit",
+    fixedCities: "Choose city count",
+    surpriseCities: "Completely random",
+    generateRandom: "Generate trip",
+    randomTip: "Prefers direct trains, morning departures, different cities, long stays, and an evening return.",
+    randomEmpty: "No round trip was found in this window. Try a longer window or fewer cities.",
+    randomTrip: "Random trip",
+    backHome: "Back home",
+    stay: "{duration} to explore",
+    totalStay: "{duration} exploring",
+    totalTravel: "{duration} on trains"
+  },
+  pt: {
+    brandSubtitle: "Assentos MAX JEUNE e MAX SENIOR disponíveis nos dados abertos da SNCF.",
+    refresh: "Atualizar dados SNCF",
+    refreshing: "Atualizando...",
+    language: "Idioma",
+    fromTab: "De",
+    toTab: "Para",
+    routeTab: "Rota",
+    flexibleTab: "Flexível",
+    randomTab: "Aleatória",
+    outboundTitle: "Encontre trens MAX grátis saindo da sua estação.",
+    inboundTitle: "Encontre trens MAX grátis chegando à sua estação.",
+    routeTitle: "Vá de uma cidade a outra em uma data.",
+    flexibleTitle: "Force uma busca flexível de rota MAX.",
+    randomTitle: "Gere uma ida e volta surpresa.",
+    outboundIntro: "Escolha uma origem e veja todos os destinos disponíveis.",
+    inboundIntro: "Escolha uma chegada e veja todas as cidades de partida disponíveis.",
+    routeIntro: "Busca trens diretos e conexões no mesmo dia para a data exata escolhida.",
+    flexibleIntro: "Escolha o que você aceita, então o app varre a partir da data e para no primeiro dia de partida com boas rotas.",
+    randomIntro: "Escolha início, fim e quanta surpresa quer. O app monta um circuito que volta para casa.",
+    originStation: "Estação de origem",
+    arrivalStation: "Estação de chegada",
+    origin: "Origem",
+    destination: "Destino",
+    travelDate: "Data da viagem",
+    startSearchingFrom: "Começar a buscar em",
+    searchTrains: "Buscar trens",
+    searching: "Buscando...",
+    findRoute: "Buscar rota",
+    startBruteForce: "Iniciar força bruta",
+    numberOfTrains: "Quantidade de trens",
+    tripCanLast: "Viagem pode durar",
+    flexibleWarning: "Esta é uma busca por força bruta. Pode demorar, mas ela para quando encontra o primeiro dia de partida com rotas e mostra apenas as melhores chegadas daquele dia.",
+    nightOnly: "Apenas Intercités noturnos",
+    map: "Mapa",
+    ready: "Pronto para buscar.",
+    lastChecked: "Última checagem",
+    rollingWindow: "Janela de disponibilidade SNCF: 30 dias.",
+    bookingNotice: "Este helper de disponibilidade não é um serviço de reserva. Sempre confirme o assento na SNCF Connect antes de planejar a viagem.",
+    startOutbound: "Comece com uma estação de origem.",
+    startInbound: "Comece com uma estação de chegada.",
+    startRoute: "Comece com origem, destino e data.",
+    startFlexible: "Comece com uma rota e os limites que você aceita.",
+    suggestionHint: "Tente nomes oficiais ou opções por cidade, como PARIS (all stations).",
+    loadingSncf: "Buscando disponibilidade SNCF...",
+    loadingSncfDetail: "Checando o dataset MAX atual para trens compatíveis.",
+    noAvailable: "Nenhum trem MAX disponível encontrado.",
+    routeEmpty: "Nenhuma rota foi encontrada com até {count} trechos na data selecionada.",
+    flexibleEmpty: "A busca por força bruta terminou sem encontrar rota dentro dos limites escolhidos.",
+    reachableEmpty: "Nenhuma cidade alcançável foi encontrada com até 3 trechos nessa data.",
+    trainEmpty: "Os dados abertos da SNCF não têm assentos MAX disponíveis para esta busca.",
+    routeFlexibleHint: " Tente a aba Flexível para buscar em dias posteriores e caminhos mais longos.",
+    dataError: "Os dados da SNCF não puderam ser carregados.",
+    retryRefresh: "Tente novamente ou atualize os dados da SNCF.",
+    flexibleRunning: "Busca por força bruta em andamento...",
+    flexibleFinished: "Busca por força bruta finalizada.",
+    waitingScan: "Aguardando o início da varredura.",
+    preparingWindow: "Preparando a janela de disponibilidade da SNCF...",
+    dailyScan: "Iniciando a busca por força bruta dia a dia.",
+    searchComplete: "Busca finalizada.",
+    searchStopped: "Busca interrompida.",
+    stop: "Parar",
+    routesFound: "{count} rota{plural} encontrada{plural}",
+    trainsLoaded: "{count} trens carregados",
+    foundStopping: "Encontrada{plural} {count} opção{plural}. Parando neste dia de partida.",
+    directTrain: "Trem direto",
+    connectionFound: "Conexão encontrada",
+    bruteRoute: "Rota por força bruta de {count} dia{plural}",
+    legLabel: "{count} trecho{plural}",
+    includingWaiting: ", incluindo {duration} de espera",
+    toWord: "até",
+    trainWord: "Trem",
+    randomStart: "Sair depois de",
+    randomEnd: "Voltar antes de",
+    citiesToVisit: "Cidades para conhecer",
+    fixedCities: "Escolher quantidade",
+    surpriseCities: "Completamente aleatório",
+    generateRandom: "Gerar viagem",
+    randomTip: "Prioriza trens diretos, saídas de manhã, cidades diferentes, longas estadias e volta à noite.",
+    randomEmpty: "Nenhuma ida e volta foi encontrada nessa janela. Tente uma janela maior ou menos cidades.",
+    randomTrip: "Viagem aleatória",
+    backHome: "Volta para casa",
+    stay: "{duration} para explorar",
+    totalStay: "{duration} explorando",
+    totalTravel: "{duration} em trens"
+  },
+  fr: {
+    brandSubtitle: "Places MAX JEUNE et MAX SENIOR disponibles depuis les données ouvertes SNCF.",
+    refresh: "Actualiser les données SNCF",
+    refreshing: "Actualisation...",
+    language: "Langue",
+    fromTab: "Départ",
+    toTab: "Arrivée",
+    routeTab: "Trajet",
+    flexibleTab: "Flexible",
+    randomTab: "Aléatoire",
+    outboundTitle: "Trouvez des trains MAX gratuits depuis votre gare.",
+    inboundTitle: "Trouvez des trains MAX gratuits vers votre gare.",
+    routeTitle: "Aller d'une ville à une autre à une date.",
+    flexibleTitle: "Chercher un trajet MAX flexible en force brute.",
+    randomTitle: "Générer un aller-retour surprise.",
+    outboundIntro: "Choisissez un départ et voyez toutes les destinations disponibles.",
+    inboundIntro: "Choisissez une arrivée et voyez toutes les villes de départ disponibles.",
+    routeIntro: "Recherche les trains directs et les correspondances le même jour pour la date choisie.",
+    flexibleIntro: "Choisissez ce que vous acceptez, puis l'app cherche à partir de votre date et s'arrête au premier jour de départ avec de bons trajets.",
+    randomIntro: "Choisissez le début, la fin et le niveau de surprise. L'app construit une boucle qui revient au point de départ.",
+    originStation: "Gare de départ",
+    arrivalStation: "Gare d'arrivée",
+    origin: "Départ",
+    destination: "Destination",
+    travelDate: "Date du voyage",
+    startSearchingFrom: "Chercher à partir du",
+    searchTrains: "Chercher des trains",
+    searching: "Recherche...",
+    findRoute: "Chercher le trajet",
+    startBruteForce: "Lancer la force brute",
+    numberOfTrains: "Nombre de trains",
+    tripCanLast: "Le voyage peut durer",
+    flexibleWarning: "C'est une recherche en force brute. Elle peut prendre du temps, mais elle s'arrête dès qu'elle trouve le premier jour de départ avec des trajets et n'affiche que les meilleures arrivées.",
+    nightOnly: "Intercités de nuit uniquement",
+    map: "Carte",
+    ready: "Prêt à chercher.",
+    lastChecked: "Dernière vérification",
+    rollingWindow: "Fenêtre de disponibilité SNCF : 30 jours.",
+    bookingNotice: "Cet outil de disponibilité n'est pas un service de réservation. Confirmez toujours la place sur SNCF Connect avant de planifier votre voyage.",
+    startOutbound: "Commencez par une gare de départ.",
+    startInbound: "Commencez par une gare d'arrivée.",
+    startRoute: "Commencez avec un départ, une destination et une date.",
+    startFlexible: "Commencez avec un trajet et les limites acceptées.",
+    suggestionHint: "Essayez les noms officiels ou les options par ville comme PARIS (all stations).",
+    loadingSncf: "Recherche des disponibilités SNCF...",
+    loadingSncfDetail: "Vérification du jeu de données MAX actuel.",
+    noAvailable: "Aucun train MAX disponible trouvé.",
+    routeEmpty: "Aucun trajet trouvé avec jusqu'à {count} segments à la date choisie.",
+    flexibleEmpty: "La recherche en force brute s'est terminée sans trajet dans les limites choisies.",
+    reachableEmpty: "Aucune ville accessible trouvée avec jusqu'à 3 segments pour cette date.",
+    trainEmpty: "Les données ouvertes SNCF n'ont aucun siège MAX disponible pour cette recherche.",
+    routeFlexibleHint: " Essayez l'onglet Flexible pour chercher des jours plus tard et des trajets plus longs.",
+    dataError: "Les données SNCF n'ont pas pu être chargées.",
+    retryRefresh: "Réessayez ou actualisez les données SNCF.",
+    flexibleRunning: "Recherche en force brute en cours...",
+    flexibleFinished: "Recherche en force brute terminée.",
+    waitingScan: "En attente du démarrage de la recherche.",
+    preparingWindow: "Préparation de la fenêtre de disponibilité SNCF...",
+    dailyScan: "Démarrage de la recherche jour par jour.",
+    searchComplete: "Recherche terminée.",
+    searchStopped: "Recherche arrêtée.",
+    stop: "Arrêter",
+    routesFound: "{count} trajet{plural} trouvé{plural}",
+    trainsLoaded: "{count} trains chargés",
+    foundStopping: "{count} option{plural} trouvée{plural}. Arrêt sur ce jour de départ.",
+    directTrain: "Train direct",
+    connectionFound: "Correspondance trouvée",
+    bruteRoute: "Trajet en force brute de {count} jour{plural}",
+    legLabel: "{count} segment{plural}",
+    includingWaiting: ", dont {duration} d'attente",
+    toWord: "à",
+    trainWord: "Train",
+    randomStart: "Partir après",
+    randomEnd: "Revenir avant",
+    citiesToVisit: "Villes à visiter",
+    fixedCities: "Choisir le nombre",
+    surpriseCities: "Complètement aléatoire",
+    generateRandom: "Générer le voyage",
+    randomTip: "Privilégie les trains directs, les départs le matin, les villes différentes, les longs arrêts et un retour le soir.",
+    randomEmpty: "Aucun aller-retour trouvé dans cette fenêtre. Essayez une fenêtre plus longue ou moins de villes.",
+    randomTrip: "Voyage aléatoire",
+    backHome: "Retour",
+    stay: "{duration} pour explorer",
+    totalStay: "{duration} sur place",
+    totalTravel: "{duration} en train"
+  },
+  es: {
+    brandSubtitle: "Asientos MAX JEUNE y MAX SENIOR disponibles desde datos abiertos de SNCF.",
+    refresh: "Actualizar datos SNCF",
+    refreshing: "Actualizando...",
+    language: "Idioma",
+    fromTab: "Desde",
+    toTab: "Hasta",
+    routeTab: "Ruta",
+    flexibleTab: "Flexible",
+    randomTab: "Aleatoria",
+    outboundTitle: "Encuentra trenes MAX gratis desde tu estación.",
+    inboundTitle: "Encuentra trenes MAX gratis hacia tu estación.",
+    routeTitle: "Ir de una ciudad a otra en una fecha.",
+    flexibleTitle: "Buscar una ruta MAX flexible por fuerza bruta.",
+    randomTitle: "Genera una ida y vuelta sorpresa.",
+    outboundIntro: "Elige un origen y mira todos los destinos disponibles.",
+    inboundIntro: "Elige una llegada y mira todas las ciudades de salida disponibles.",
+    routeIntro: "Busca trenes directos y conexiones del mismo día para la fecha exacta elegida.",
+    flexibleIntro: "Elige lo que aceptas, luego la app busca desde tu fecha y se detiene en el primer día de salida con buenas rutas.",
+    randomIntro: "Elige inicio, fin y cuánta sorpresa quieres. La app arma un circuito que vuelve a casa.",
+    originStation: "Estación de origen",
+    arrivalStation: "Estación de llegada",
+    origin: "Origen",
+    destination: "Destino",
+    travelDate: "Fecha de viaje",
+    startSearchingFrom: "Buscar desde",
+    searchTrains: "Buscar trenes",
+    searching: "Buscando...",
+    findRoute: "Buscar ruta",
+    startBruteForce: "Iniciar fuerza bruta",
+    numberOfTrains: "Cantidad de trenes",
+    tripCanLast: "El viaje puede durar",
+    flexibleWarning: "Esta es una búsqueda por fuerza bruta. Puede tardar, pero se detiene cuando encuentra el primer día de salida con rutas y solo muestra las mejores llegadas de ese día.",
+    nightOnly: "Solo Intercités nocturnos",
+    map: "Mapa",
+    ready: "Listo para buscar.",
+    lastChecked: "Última revisión",
+    rollingWindow: "Ventana de disponibilidad SNCF: 30 días.",
+    bookingNotice: "Este ayudante de disponibilidad no es un servicio de reserva. Confirma siempre el asiento en SNCF Connect antes de planificar tu viaje.",
+    startOutbound: "Empieza con una estación de origen.",
+    startInbound: "Empieza con una estación de llegada.",
+    startRoute: "Empieza con origen, destino y fecha.",
+    startFlexible: "Empieza con una ruta y los límites que aceptas.",
+    suggestionHint: "Prueba nombres oficiales u opciones por ciudad como PARIS (all stations).",
+    loadingSncf: "Buscando disponibilidad SNCF...",
+    loadingSncfDetail: "Revisando el dataset MAX actual.",
+    noAvailable: "No se encontraron trenes MAX disponibles.",
+    routeEmpty: "No se encontró ruta con hasta {count} tramos en la fecha elegida.",
+    flexibleEmpty: "La búsqueda por fuerza bruta terminó sin encontrar ruta dentro de los límites elegidos.",
+    reachableEmpty: "No se encontró ninguna ciudad alcanzable con hasta 3 tramos para esta fecha.",
+    trainEmpty: "Los datos abiertos de SNCF no tienen asientos MAX disponibles para esta búsqueda.",
+    routeFlexibleHint: " Prueba la pestaña Flexible para buscar días posteriores y caminos más largos.",
+    dataError: "No se pudieron cargar los datos SNCF.",
+    retryRefresh: "Intenta de nuevo o actualiza los datos SNCF.",
+    flexibleRunning: "Búsqueda por fuerza bruta en curso...",
+    flexibleFinished: "Búsqueda por fuerza bruta finalizada.",
+    waitingScan: "Esperando el inicio de la búsqueda.",
+    preparingWindow: "Preparando la ventana de disponibilidad SNCF...",
+    dailyScan: "Iniciando la búsqueda diaria por fuerza bruta.",
+    searchComplete: "Búsqueda finalizada.",
+    searchStopped: "Búsqueda detenida.",
+    stop: "Detener",
+    routesFound: "{count} ruta{plural} encontrada{plural}",
+    trainsLoaded: "{count} trenes cargados",
+    foundStopping: "{count} opción{plural} encontrada{plural}. Deteniendo en este día de salida.",
+    directTrain: "Tren directo",
+    connectionFound: "Conexión encontrada",
+    bruteRoute: "Ruta por fuerza bruta de {count} día{plural}",
+    legLabel: "{count} tramo{plural}",
+    includingWaiting: ", incluyendo {duration} de espera",
+    toWord: "a",
+    trainWord: "Tren",
+    randomStart: "Salir después de",
+    randomEnd: "Volver antes de",
+    citiesToVisit: "Ciudades para conocer",
+    fixedCities: "Elegir cantidad",
+    surpriseCities: "Completamente aleatorio",
+    generateRandom: "Generar viaje",
+    randomTip: "Prioriza trenes directos, salidas por la mañana, ciudades distintas, estancias largas y regreso por la noche.",
+    randomEmpty: "No se encontró una ida y vuelta en esta ventana. Prueba una ventana más larga o menos ciudades.",
+    randomTrip: "Viaje aleatorio",
+    backHome: "Vuelta a casa",
+    stay: "{duration} para explorar",
+    totalStay: "{duration} explorando",
+    totalTravel: "{duration} en trenes"
+  }
 };
 
 const CITY_COORDS: Record<string, { lat: number; lon: number }> = {
@@ -187,6 +550,7 @@ const MAP_BOUNDS = {
 };
 
 export default function Home() {
+  const [language, setLanguage] = useState<Language>("en");
   const [mode, setMode] = useState<SearchMode>("outbound");
   const [station, setStation] = useState("");
   const [date, setDate] = useState("");
@@ -195,10 +559,17 @@ export default function Home() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [trains, setTrains] = useState<TrainAvailability[]>([]);
   const [routes, setRoutes] = useState<RouteOption[]>([]);
+  const [randomTrip, setRandomTrip] = useState<RandomTripOption | null>(null);
+  const [randomTripHistory, setRandomTripHistory] = useState<string[]>([]);
+  const [randomCityHistory, setRandomCityHistory] = useState<string[]>([]);
   const [routeOrigin, setRouteOrigin] = useState("");
   const [routeDestination, setRouteDestination] = useState("");
   const [routeDate, setRouteDate] = useState("");
   const [routeMaxLegs, setRouteMaxLegs] = useState(2);
+  const [randomStartAt, setRandomStartAt] = useState("");
+  const [randomEndAt, setRandomEndAt] = useState("");
+  const [randomCityCount, setRandomCityCount] = useState(3);
+  const [randomCityMode, setRandomCityMode] = useState<RandomCityMode>("fixed");
   const [flexLegCounts, setFlexLegCounts] = useState<number[]>([1, 2, 3]);
   const [flexTravelDays, setFlexTravelDays] = useState<number[]>([1, 2, 3]);
   const [flexState, setFlexState] = useState<FlexibleSearchState>({
@@ -218,12 +589,29 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const flexAbortRef = useRef<AbortController | null>(null);
+  const text = COPY[language];
+  const randomMaxCities = useMemo(
+    () => maxRandomCitiesForWindow(randomStartAt, randomEndAt),
+    [randomEndAt, randomStartAt]
+  );
+
+  useEffect(() => {
+    const savedLanguage = window.localStorage.getItem("tgvmax-language");
+    setLanguage(resolveLanguage(savedLanguage || window.navigator.language));
+  }, []);
 
   useEffect(() => {
     const today = todayInputValue();
     setDate(today);
     setRouteDate(today);
+    setRandomStartAt(`${today}T08:00`);
+    setRandomEndAt(`${addDaysInput(today, 3)}T22:00`);
   }, []);
+
+  function changeLanguage(nextLanguage: Language) {
+    setLanguage(nextLanguage);
+    window.localStorage.setItem("tgvmax-language", nextLanguage);
+  }
 
   useEffect(() => {
     flexAbortRef.current?.abort();
@@ -231,6 +619,9 @@ export default function Home() {
     setSuggestions([]);
     setTrains([]);
     setRoutes([]);
+    setRandomTrip(null);
+    setRandomTripHistory([]);
+    setRandomCityHistory([]);
     setReachableLegs(1);
     setStatus("idle");
     setError("");
@@ -251,7 +642,16 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (isRouteSearchMode(mode) || station.trim().length < 2) {
+    setRandomCityCount((current) => Math.min(Math.max(1, current), randomMaxCities));
+  }, [randomMaxCities]);
+
+  useEffect(() => {
+    setRandomTripHistory([]);
+    setRandomCityHistory([]);
+  }, [randomCityCount, randomCityMode, randomEndAt, randomStartAt, routeOrigin]);
+
+  useEffect(() => {
+    if (isPlannerMode(mode) || station.trim().length < 2) {
       setSuggestions([]);
       return;
     }
@@ -285,7 +685,7 @@ export default function Home() {
   }, [mode, station]);
 
   useEffect(() => {
-    if (!isRouteSearchMode(mode)) {
+    if (!isPlannerMode(mode)) {
       return;
     }
 
@@ -293,7 +693,7 @@ export default function Home() {
   }, [mode, routeOrigin]);
 
   useEffect(() => {
-    if (!isRouteSearchMode(mode)) {
+    if (mode === "random" || !isPlannerMode(mode)) {
       return;
     }
 
@@ -316,7 +716,7 @@ export default function Home() {
     event?.preventDefault();
 
     if (!station.trim()) {
-      setError(mode === "outbound" ? "Choose an origin station." : "Choose an arrival station.");
+      setError(mode === "outbound" ? text.startOutbound : text.startInbound);
       setStatus("error");
       return;
     }
@@ -402,7 +802,7 @@ export default function Home() {
     event?.preventDefault();
 
     if (!routeOrigin.trim() || !routeDestination.trim()) {
-      setError("Choose both origin and destination.");
+      setError(text.startRoute);
       setStatus("error");
       return;
     }
@@ -447,13 +847,13 @@ export default function Home() {
     event?.preventDefault();
 
     if (!routeOrigin.trim() || !routeDestination.trim()) {
-      setError("Choose both origin and destination.");
+      setError(text.startRoute);
       setStatus("error");
       return;
     }
 
     if (!flexLegCounts.length || !flexTravelDays.length) {
-      setError("Choose at least one train count and one trip length.");
+      setError(text.startFlexible);
       setStatus("error");
       return;
     }
@@ -468,8 +868,8 @@ export default function Home() {
     setSelectedRouteId("");
     setFlexState({
       isSearching: true,
-      message: "Preparando a janela de disponibilidade da SNCF...",
-      currentCheck: flexibleCheckLabel(routeDate, flexTravelDays[0] ?? 1, flexLegCounts[0] ?? 1),
+      message: text.preparingWindow,
+      currentCheck: flexibleCheckLabel(routeDate, flexTravelDays[0] ?? 1, flexLegCounts[0] ?? 1, language),
       foundCount: 0,
       searchedFrom: routeDate,
       searchedTo: "",
@@ -502,18 +902,27 @@ export default function Home() {
             searchedFrom: eventData.searchedFrom,
             searchedTo: eventData.searchedTo,
             totalTrains: eventData.totalTrains,
-            message: "Iniciando a busca por força bruta dia a dia."
+            message: text.dailyScan
           }));
           return;
         }
 
         if (eventData.type === "progress") {
+          const progressMessage =
+            eventData.travelDays && eventData.legCount
+              ? text.dailyScan
+              : eventData.foundCount > 0
+                ? formatTemplate(text.foundStopping, {
+                    count: String(eventData.foundCount),
+                    plural: eventData.foundCount === 1 ? "" : "s"
+                  })
+                : text.loadingSncfDetail;
           setFlexState((current) => ({
             ...current,
-            message: eventData.message,
+            message: progressMessage,
             currentCheck:
               eventData.travelDays && eventData.legCount
-                ? flexibleCheckLabel(eventData.date, eventData.travelDays, eventData.legCount)
+                ? flexibleCheckLabel(eventData.date, eventData.travelDays, eventData.legCount, language)
                 : current.currentCheck,
             foundCount: eventData.foundCount,
             totalTrains: eventData.totalTrains ?? current.totalTrains
@@ -528,7 +937,10 @@ export default function Home() {
           setFlexState((current) => ({
             ...current,
             foundCount: eventData.foundCount,
-            message: `Found ${eventData.foundCount} option${eventData.foundCount > 1 ? "s" : ""}. Stopping on this departure day.`
+            message: formatTemplate(text.foundStopping, {
+              count: String(eventData.foundCount),
+              plural: eventData.foundCount === 1 ? "" : "s"
+            })
           }));
           return;
         }
@@ -538,11 +950,11 @@ export default function Home() {
         }
       });
 
-      setFlexState((current) => ({ ...current, isSearching: false, message: "Search complete." }));
+      setFlexState((current) => ({ ...current, isSearching: false, message: text.searchComplete }));
       setStatus((current) => (current === "success" ? "success" : "empty"));
     } catch (requestError) {
       if (controller.signal.aborted) {
-        setFlexState((current) => ({ ...current, isSearching: false, message: "Search stopped." }));
+        setFlexState((current) => ({ ...current, isSearching: false, message: text.searchStopped }));
         setStatus((current) => (current === "success" ? "success" : "idle"));
         return;
       }
@@ -562,8 +974,64 @@ export default function Home() {
     }
   }
 
-  function stopFlexibleSearch() {
+function stopFlexibleSearch() {
     flexAbortRef.current?.abort();
+  }
+
+  async function searchRandom(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+
+    if (!routeOrigin.trim()) {
+      setError(text.startOutbound);
+      setStatus("error");
+      return;
+    }
+
+    setStatus("loading");
+    setError("");
+    setRandomTrip(null);
+
+    const params = new URLSearchParams({
+      origin: routeOrigin.trim(),
+      startAt: randomStartAt,
+      endAt: randomEndAt,
+      cityCount: String(Math.min(randomCityCount, randomMaxCities)),
+      randomCityCount: String(randomCityMode === "surprise"),
+      nonce: `${Date.now()}-${Math.random()}`
+    });
+    randomTripHistory.forEach((tripId) => {
+      params.append("excludeTripId", tripId);
+    });
+    randomCityHistory.forEach((city) => {
+      params.append("excludeCity", city);
+    });
+
+    try {
+      const response = await fetch(`/api/random-route?${params}`);
+      const data = (await response.json()) as RandomTripResponse;
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Random trip could not be generated.");
+      }
+
+      const generatedTrip = data.trip;
+      setRandomTrip(generatedTrip);
+      if (generatedTrip) {
+        setRandomTripHistory((current) => Array.from(new Set([...current, generatedTrip.id])));
+        setRandomCityHistory((current) =>
+          Array.from(new Set([...current, ...generatedTrip.stops.map((stop) => stop.city || stop.arrivalLeg.destination)]))
+        );
+      }
+      setCheckedAt(data.checkedAt);
+      setStatus(data.trip ? "success" : "empty");
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Random trip could not be generated."
+      );
+      setStatus("error");
+    }
   }
 
   async function refresh() {
@@ -604,12 +1072,28 @@ export default function Home() {
             </div>
             <div>
               <h1>TGVMax Finder</h1>
-              <p>Available MAX JEUNE and MAX SENIOR seats from SNCF Open Data.</p>
+              <p>{text.brandSubtitle}</p>
             </div>
           </div>
-          <button className="refresh-button" disabled={refreshing} onClick={refresh} type="button">
-            {refreshing ? "Refreshing..." : "Refresh SNCF data"}
-          </button>
+          <div className="topbar-actions">
+            <label className="language-picker">
+              <span aria-hidden="true">Aa</span>
+              <select
+                aria-label={text.language}
+                onChange={(event) => changeLanguage(event.target.value as Language)}
+                value={language}
+              >
+                {LANGUAGES.map((item) => (
+                  <option key={item.code} value={item.code}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="refresh-button" disabled={refreshing} onClick={refresh} type="button">
+              {refreshing ? text.refreshing : text.refresh}
+            </button>
+          </div>
         </div>
 
         <section className="search-band" aria-labelledby="search-title">
@@ -621,7 +1105,7 @@ export default function Home() {
               role="tab"
               type="button"
             >
-              From a city
+              {text.fromTab}
             </button>
             <button
               aria-selected={mode === "inbound"}
@@ -630,7 +1114,7 @@ export default function Home() {
               role="tab"
               type="button"
             >
-              To a city
+              {text.toTab}
             </button>
             <button
               aria-selected={mode === "route"}
@@ -639,7 +1123,7 @@ export default function Home() {
               role="tab"
               type="button"
             >
-              Route
+              {text.routeTab}
             </button>
             <button
               aria-selected={mode === "flexible"}
@@ -648,36 +1132,49 @@ export default function Home() {
               role="tab"
               type="button"
             >
-              Flexible
+              {text.flexibleTab}
+            </button>
+            <button
+              aria-selected={mode === "random"}
+              className={mode === "random" ? "tab active" : "tab"}
+              onClick={() => setMode("random")}
+              role="tab"
+              type="button"
+            >
+              {text.randomTab}
             </button>
           </div>
 
           <div className="intro">
             <h2 id="search-title">
               {mode === "outbound"
-                ? "Find free MAX trains from your station."
+                ? text.outboundTitle
                 : mode === "inbound"
-                  ? "Find free MAX trains arriving at your station."
+                  ? text.inboundTitle
                   : mode === "route"
-                    ? "Go from one city to another on one date."
-                    : "Brute-force a flexible MAX route."}
+                    ? text.routeTitle
+                    : mode === "flexible"
+                      ? text.flexibleTitle
+                      : text.randomTitle}
             </h2>
             <p>
               {mode === "outbound"
-                ? "Pick an origin and see every available destination."
+                ? text.outboundIntro
                 : mode === "inbound"
-                  ? "Pick an arrival city and see every available departure city."
+                  ? text.inboundIntro
                   : mode === "route"
-                    ? "Search direct trains and same-day connections for the exact date you choose."
-                    : "Pick what you are willing to tolerate, then the app scans forward from your date and stops on the first departure day with good routes."}
+                    ? text.routeIntro
+                    : mode === "flexible"
+                      ? text.flexibleIntro
+                      : text.randomIntro}
             </p>
           </div>
 
-          {!isRouteSearchMode(mode) ? (
+          {!isPlannerMode(mode) ? (
           <form className="search-form" onSubmit={search}>
             <div className="field">
               <label htmlFor="station">
-                {mode === "outbound" ? "Origin station" : "Arrival station"}
+                {mode === "outbound" ? text.originStation : text.arrivalStation}
               </label>
               <input
                 autoComplete="off"
@@ -706,7 +1203,7 @@ export default function Home() {
             </div>
 
             <div className="field">
-              <label htmlFor="date">Travel date</label>
+              <label htmlFor="date">{text.travelDate}</label>
               <input
                 id="date"
                 onChange={(event) => setDate(event.target.value)}
@@ -716,14 +1213,14 @@ export default function Home() {
             </div>
 
             <button className="primary-button" disabled={status === "loading"} type="submit">
-              {status === "loading" ? "Searching..." : "Search trains"}
+              {status === "loading" ? text.searching : text.searchTrains}
             </button>
           </form>
           ) : mode === "route" ? (
             <form className="route-form route-form-simple" onSubmit={(event) => searchRoute(event, 2)}>
               <StationInput
                 id="route-origin"
-                label="Origin"
+                label={text.origin}
                 onChange={setRouteOrigin}
                 onPick={(value) => {
                   setRouteOrigin(value);
@@ -735,7 +1232,7 @@ export default function Home() {
               />
               <StationInput
                 id="route-destination"
-                label="Destination"
+                label={text.destination}
                 onChange={setRouteDestination}
                 onPick={(value) => {
                   setRouteDestination(value);
@@ -746,7 +1243,7 @@ export default function Home() {
                 value={routeDestination}
               />
               <div className="field">
-                <label htmlFor="route-date">Travel date</label>
+                <label htmlFor="route-date">{text.travelDate}</label>
                 <input
                   id="route-date"
                   onChange={(event) => setRouteDate(event.target.value)}
@@ -759,14 +1256,14 @@ export default function Home() {
                 disabled={status === "loading"}
                 type="submit"
               >
-                {status === "loading" ? "Searching..." : "Find route"}
+                {status === "loading" ? text.searching : text.findRoute}
               </button>
             </form>
-          ) : (
+          ) : mode === "flexible" ? (
             <form className="flexible-form" onSubmit={searchFlexible}>
               <StationInput
                 id="flex-origin"
-                label="Origin"
+                label={text.origin}
                 onChange={setRouteOrigin}
                 onPick={(value) => {
                   setRouteOrigin(value);
@@ -778,7 +1275,7 @@ export default function Home() {
               />
               <StationInput
                 id="flex-destination"
-                label="Destination"
+                label={text.destination}
                 onChange={setRouteDestination}
                 onPick={(value) => {
                   setRouteDestination(value);
@@ -789,7 +1286,7 @@ export default function Home() {
                 value={routeDestination}
               />
               <div className="field">
-                <label htmlFor="flex-date">Start searching from</label>
+                <label htmlFor="flex-date">{text.startSearchingFrom}</label>
                 <input
                   id="flex-date"
                   onChange={(event) => setRouteDate(event.target.value)}
@@ -802,12 +1299,12 @@ export default function Home() {
                 disabled={flexState.isSearching}
                 type="submit"
               >
-                {flexState.isSearching ? "Searching..." : "Start brute force"}
+                {flexState.isSearching ? text.searching : text.startBruteForce}
               </button>
 
               <div className="choice-panel" aria-label="Flexible route limits">
                 <div className="choice-set">
-                  <span>Number of trains</span>
+                  <span>{text.numberOfTrains}</span>
                   {[1, 2, 3, 4].map((count) => (
                     <label className={flexLegCounts.includes(count) ? "active" : ""} key={count}>
                       <input
@@ -820,7 +1317,7 @@ export default function Home() {
                   ))}
                 </div>
                 <div className="choice-set">
-                  <span>Trip can last</span>
+                  <span>{text.tripCanLast}</span>
                   {[1, 2, 3].map((days) => (
                     <label className={flexTravelDays.includes(days) ? "active" : ""} key={days}>
                       <input
@@ -828,33 +1325,109 @@ export default function Home() {
                         onChange={() => setFlexTravelDays((current) => toggleNumber(current, days))}
                         type="checkbox"
                       />
-                      {days} day{days > 1 ? "s" : ""}
+                      {formatDayLabel(days, language)}
                     </label>
                   ))}
                 </div>
               </div>
 
               <div className="warning-card">
-                This is a brute-force search. It can take a while, but it stops when it finds the
-                first departure day with routes and only shows the best arrivals for that day.
+                {text.flexibleWarning}
+              </div>
+            </form>
+          ) : (
+            <form className="random-form" onSubmit={searchRandom}>
+              <StationInput
+                id="random-origin"
+                label={text.origin}
+                onChange={setRouteOrigin}
+                onPick={(value) => {
+                  setRouteOrigin(value);
+                  setRouteOriginSuggestions([]);
+                }}
+                placeholder="Paris..."
+                suggestions={routeOriginSuggestions}
+                value={routeOrigin}
+              />
+              <div className="field">
+                <label htmlFor="random-start">{text.randomStart}</label>
+                <input
+                  id="random-start"
+                  onChange={(event) => setRandomStartAt(event.target.value)}
+                  type="datetime-local"
+                  value={randomStartAt}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="random-end">{text.randomEnd}</label>
+                <input
+                  id="random-end"
+                  onChange={(event) => setRandomEndAt(event.target.value)}
+                  type="datetime-local"
+                  value={randomEndAt}
+                />
+              </div>
+              <div className="choice-panel random-choice-panel">
+                <div className="choice-set">
+                  <span>{text.citiesToVisit}</span>
+                  <label className={randomCityMode === "fixed" ? "active" : ""}>
+                    <input
+                      checked={randomCityMode === "fixed"}
+                      onChange={() => setRandomCityMode("fixed")}
+                      type="checkbox"
+                    />
+                    {text.fixedCities}
+                  </label>
+                  <label className={randomCityMode === "surprise" ? "active" : ""}>
+                    <input
+                      checked={randomCityMode === "surprise"}
+                      onChange={() => setRandomCityMode("surprise")}
+                      type="checkbox"
+                    />
+                    {text.surpriseCities}
+                  </label>
+                </div>
+                {randomCityMode === "fixed" ? (
+                  <div className="field random-count-field">
+                    <label htmlFor="random-city-count">
+                      {text.citiesToVisit} (max {randomMaxCities})
+                    </label>
+                    <input
+                      aria-label={text.citiesToVisit}
+                      id="random-city-count"
+                      className="small-number-input"
+                      max={randomMaxCities}
+                      min={1}
+                      onChange={(event) =>
+                        setRandomCityCount(Math.min(randomMaxCities, Math.max(1, Number(event.target.value))))
+                      }
+                      type="number"
+                      value={randomCityCount}
+                    />
+                  </div>
+                ) : null}
+                <button className="primary-button" disabled={status === "loading"} type="submit">
+                  {status === "loading" ? text.searching : text.generateRandom}
+                </button>
+                <div className="warning-card random-tip">{text.randomTip}</div>
               </div>
             </form>
           )}
 
-          {!isRouteSearchMode(mode) ? (
+          {!isPlannerMode(mode) ? (
             <label className="check-row">
               <input
                 checked={nightOnly}
                 onChange={(event) => setNightOnly(event.target.checked)}
                 type="checkbox"
               />
-              Night Intercites only
+              {text.nightOnly}
             </label>
           ) : null}
 
-          {!isRouteSearchMode(mode) ? (
+          {!isPlannerMode(mode) ? (
             <div className="leg-filter" aria-label="Reachable train count">
-              <span>Map</span>
+              <span>{text.map}</span>
               {[1, 2, 3].map((legCount) => (
                 <label className={reachableLegs === legCount ? "active" : ""} key={legCount}>
                   <input
@@ -863,7 +1436,7 @@ export default function Home() {
                     name="reachable-legs"
                     type="radio"
                   />
-                  {legCount} train{legCount > 1 ? "s" : ""}
+                  {formatTrainLabel(legCount, language)}
                 </label>
               ))}
             </div>
@@ -871,15 +1444,14 @@ export default function Home() {
 
           <div className="meta-row">
             <span>
-              {checkedAt ? `Last checked: ${formatCheckedAt(checkedAt)}` : "Ready to search."}
+              {checkedAt ? `${text.lastChecked}: ${formatCheckedAt(checkedAt, language)}` : text.ready}
             </span>
-            <span>Rolling SNCF availability window: 30 days.</span>
+            <span>{text.rollingWindow}</span>
           </div>
         </section>
 
         <p className="notice">
-          This availability helper is not a booking service. Always confirm the seat on SNCF
-          Connect before planning your trip.
+          {text.bookingNotice}
         </p>
 
         <section className="results" aria-live="polite">
@@ -887,57 +1459,73 @@ export default function Home() {
             <div className="message">
               <strong>
                 {mode === "outbound"
-                  ? "Start with an origin station."
+                  ? text.startOutbound
                   : mode === "inbound"
-                    ? "Start with an arrival station."
+                    ? text.startInbound
                     : mode === "route"
-                      ? "Start with an origin, destination, and date."
-                      : "Start with a route and the limits you can accept."}
+                      ? text.startRoute
+                      : mode === "flexible"
+                        ? text.startFlexible
+                        : text.randomTip}
               </strong>
-              Try official names or city-wide options such as PARIS (all stations).
+              {text.suggestionHint}
             </div>
           ) : null}
 
           {status === "loading" && mode !== "flexible" ? (
             <div className="message">
-              <strong>Searching SNCF availability...</strong>
-              Checking the current MAX dataset for matching trains.
+              <strong>{text.loadingSncf}</strong>
+              {text.loadingSncfDetail}
             </div>
           ) : null}
 
           {mode === "flexible" && (flexState.isSearching || flexState.message) ? (
-            <FlexibleProgress state={flexState} onStop={stopFlexibleSearch} />
+            <FlexibleProgress
+              language={language}
+              onStop={stopFlexibleSearch}
+              state={flexState}
+              text={text}
+            />
           ) : null}
 
           {status === "empty" ? (
             <div className="message">
-              <strong>No available MAX trains found.</strong>
+              <strong>{text.noAvailable}</strong>
               {mode === "route"
-                ? `No route was found with up to ${routeMaxLegs} legs on the selected date.`
+                ? formatTemplate(text.routeEmpty, { count: String(routeMaxLegs) })
                 : mode === "flexible"
-                  ? "The brute-force scan finished without finding a route inside the selected limits."
+                  ? text.flexibleEmpty
+                : mode === "random"
+                  ? text.randomEmpty
                 : reachableLegs
-                  ? "No reachable city was found with up to 3 legs for this date."
-                : `SNCF Open Data has no available MAX seats for this search${date ? " on the selected date" : ""}.`}
+                  ? text.reachableEmpty
+                : text.trainEmpty}
               {mode === "route" ? (
-                <span> Try the Flexible tab if you want the app to search later days and longer paths.</span>
+                <span>{text.routeFlexibleHint}</span>
               ) : null}
             </div>
           ) : null}
 
           {status === "error" ? (
             <div className="message">
-              <strong>SNCF data could not be loaded.</strong>
-              {error || "Please retry or refresh the SNCF data."}
+              <strong>{text.dataError}</strong>
+              {error || text.retryRefresh}
             </div>
           ) : null}
 
-          {status === "success" && !isRouteSearchMode(mode) && !reachableLegs ? (
+          {status === "success" && !isPlannerMode(mode) && !reachableLegs ? (
             <AvailabilityMap points={mapPoints} mode={mode} />
           ) : null}
 
-          {status === "success" && !isRouteSearchMode(mode) && reachableLegs ? (
+          {status === "success" && !isPlannerMode(mode) && reachableLegs ? (
             <ReachableMap routes={routes} mode={mode} station={station} />
+          ) : null}
+
+          {status === "success" && mode === "random" && randomTrip ? (
+            <>
+              <RandomTripMap trip={randomTrip} />
+              <RandomTripResult language={language} text={text} trip={randomTrip} />
+            </>
           ) : null}
 
           {(status === "success" || (mode === "flexible" && routes.length > 0)) &&
@@ -948,28 +1536,32 @@ export default function Home() {
 
           {(status === "success" || (mode === "flexible" && routes.length > 0)) &&
           (isRouteSearchMode(mode) || reachableLegs) ? (
-            reachableLegs && !isRouteSearchMode(mode) ? (
+            reachableLegs && !isPlannerMode(mode) ? (
               <ReachableResults
+                language={language}
                 mode={mode}
                 onSelect={setSelectedRouteId}
                 routes={routes}
                 selectedRouteId={selectedRoute?.id ?? ""}
+                text={text}
               />
             ) : (
               <RouteResults
+                language={language}
                 onSelect={setSelectedRouteId}
                 routes={displayRoutes}
                 selectedRouteId={selectedRoute?.id ?? ""}
+                text={text}
                 variant={mode === "flexible" ? "flexible" : "default"}
               />
             )
           ) : null}
 
-          {status === "success" && !isRouteSearchMode(mode) && !reachableLegs
+          {status === "success" && !isPlannerMode(mode) && !reachableLegs
             ? groupedResults.map((day) => (
                 <div className="day-group" key={day.date}>
                   <div className="day-heading">
-                    <h3>{formatDate(day.date)}</h3>
+                    <h3>{formatDate(day.date, language)}</h3>
                     <span>{countDayTrains(day)} available trains</span>
                   </div>
 
@@ -1039,6 +1631,10 @@ function StationInput({
   suggestions: string[];
   value: string;
 }) {
+  function pickSuggestion(suggestion: string) {
+    onPick(suggestion);
+  }
+
   return (
     <div className="field">
       <label htmlFor={id}>{label}</label>
@@ -1053,7 +1649,15 @@ function StationInput({
       {suggestions.length > 0 ? (
         <div className="suggestions" role="listbox">
           {suggestions.map((suggestion) => (
-            <button key={suggestion} onClick={() => onPick(suggestion)} type="button">
+            <button
+              key={suggestion}
+              onClick={() => pickSuggestion(suggestion)}
+              onPointerDown={(event) => {
+                event.preventDefault();
+                pickSuggestion(suggestion);
+              }}
+              type="button"
+            >
               {suggestion}
             </button>
           ))}
@@ -1064,14 +1668,18 @@ function StationInput({
 }
 
 function RouteResults({
+  language,
   onSelect,
   routes,
   selectedRouteId,
+  text,
   variant = "default"
 }: {
+  language: Language;
   onSelect: (routeId: string) => void;
   routes: RouteOption[];
   selectedRouteId: string;
+  text: Record<string, string>;
   variant?: "default" | "flexible";
 }) {
   return (
@@ -1094,17 +1702,27 @@ function RouteResults({
             <div>
               <strong>
                 {route.type === "direct"
-                  ? "Direct train"
+                  ? text.directTrain
                   : variant === "flexible"
-                    ? `${routeTravelDays(route)} day brute-force route`
-                    : "Connection found"}
+                    ? formatTemplate(text.bruteRoute, {
+                        count: String(routeTravelDays(route)),
+                        plural: routeTravelDays(route) === 1 ? "" : "s"
+                      })
+                    : text.connectionFound}
               </strong>
               <span>
                 {formatDuration(route.durationMinutes)}
-                {route.waitMinutes ? `, including ${formatDuration(route.waitMinutes)} waiting` : ""}
+                {route.waitMinutes
+                  ? formatTemplate(text.includingWaiting, { duration: formatDuration(route.waitMinutes) })
+                  : ""}
               </span>
             </div>
-            <span className="badge">{route.legs.length} leg{route.legs.length > 1 ? "s" : ""}</span>
+            <span className="badge">
+              {formatTemplate(text.legLabel, {
+                count: String(route.legs.length),
+                plural: route.legs.length === 1 ? "" : "s"
+              })}
+            </span>
           </header>
           <div className="route-legs">
             {route.legs.map((leg, index) => (
@@ -1115,7 +1733,7 @@ function RouteResults({
                     {leg.origin} {"->"} {leg.destination}
                   </strong>
                   <span>
-                    {formatDate(leg.date)} · {leg.departureTime} to {leg.arrivalTime} · Train{" "}
+                    {formatDate(leg.date, language)} · {leg.departureTime} {text.toWord} {leg.arrivalTime} · {text.trainWord}{" "}
                     {leg.trainNo}
                   </span>
                 </div>
@@ -1129,46 +1747,118 @@ function RouteResults({
 }
 
 function FlexibleProgress({
+  language,
   onStop,
-  state
+  state,
+  text
 }: {
+  language: Language;
   onStop: () => void;
   state: FlexibleSearchState;
+  text: Record<string, string>;
 }) {
   return (
     <div className="search-progress">
       <div className={state.isSearching ? "progress-orbit" : "progress-orbit stopped"} aria-hidden="true" />
       <div>
-        <strong>{state.isSearching ? "Brute-force search running..." : "Brute-force search finished."}</strong>
+        <strong>{state.isSearching ? text.flexibleRunning : text.flexibleFinished}</strong>
         <span className="current-check">
-          {state.currentCheck || state.message || "Waiting for the scan to start."}
+          {state.currentCheck || state.message || text.waitingScan}
         </span>
         {state.currentCheck && state.message ? <small>{state.message}</small> : null}
         <div className="progress-facts">
-          <em>{state.foundCount} route{state.foundCount === 1 ? "" : "s"} found</em>
-          {state.totalTrains ? <em>{state.totalTrains} trains loaded</em> : null}
+          <em>
+            {formatTemplate(text.routesFound, {
+              count: String(state.foundCount),
+              plural: state.foundCount === 1 ? "" : "s"
+            })}
+          </em>
+          {state.totalTrains ? (
+            <em>{formatTemplate(text.trainsLoaded, { count: String(state.totalTrains) })}</em>
+          ) : null}
           {state.searchedTo ? <em>{state.searchedFrom} to {state.searchedTo}</em> : null}
         </div>
       </div>
       {state.isSearching ? (
         <button onClick={onStop} type="button">
-          Stop
+          {text.stop}
         </button>
       ) : null}
     </div>
   );
 }
 
+function RandomTripResult({
+  language,
+  text,
+  trip
+}: {
+  language: Language;
+  text: Record<string, string>;
+  trip: RandomTripOption;
+}) {
+  return (
+    <div className="route-results">
+      <article className="route-option selected random-trip-card">
+        <header>
+          <div>
+            <strong>{text.randomTrip}</strong>
+            <span>
+              {trip.stops.length} {text.citiesToVisit.toLowerCase()} ·{" "}
+              {formatTemplate(text.totalStay, { duration: formatDuration(trip.totalStayMinutes) })} ·{" "}
+              {formatTemplate(text.totalTravel, { duration: formatDuration(trip.totalTravelMinutes) })}
+            </span>
+          </div>
+          <span className="badge">{trip.origin}</span>
+        </header>
+        <div className="route-legs">
+          {trip.stops.map((stop, index) => (
+            <div className="route-leg" key={`${stop.arrivalLeg.id}:${index}`}>
+              <span className="leg-index">{index + 1}</span>
+              <div>
+                <strong>
+                  {stop.arrivalLeg.origin} {"->"} {stop.arrivalLeg.destination}
+                </strong>
+                <span>
+                  {formatDate(stop.arrivalLeg.date, language)} · {stop.arrivalLeg.departureTime}{" "}
+                  {text.toWord} {stop.arrivalLeg.arrivalTime} · {text.trainWord} {stop.arrivalLeg.trainNo}
+                </span>
+                <em>{formatTemplate(text.stay, { duration: formatDuration(stop.stayMinutes) })}</em>
+              </div>
+            </div>
+          ))}
+          <div className="route-leg">
+            <span className="leg-index">{trip.stops.length + 1}</span>
+            <div>
+              <strong>
+                {text.backHome}: {trip.returnLeg.origin} {"->"} {trip.returnLeg.destination}
+              </strong>
+              <span>
+                {formatDate(trip.returnLeg.date, language)} · {trip.returnLeg.departureTime} {text.toWord}{" "}
+                {trip.returnLeg.arrivalTime} · {text.trainWord} {trip.returnLeg.trainNo}
+              </span>
+            </div>
+          </div>
+        </div>
+      </article>
+    </div>
+  );
+}
+
 function ReachableResults({
+  language,
   mode,
   onSelect,
   routes,
-  selectedRouteId
+  selectedRouteId,
+  text
 }: {
+  language: Language;
   mode: SearchMode;
   onSelect: (routeId: string) => void;
   routes: RouteOption[];
   selectedRouteId: string;
+  text: Record<string, string>;
 }) {
   const groups = groupReachableRoutes(routes, mode);
 
@@ -1181,9 +1871,11 @@ function ReachableResults({
             <span>{group.routes.length} option{group.routes.length > 1 ? "s" : ""}</span>
           </div>
           <RouteResults
+            language={language}
             onSelect={onSelect}
             routes={group.routes}
             selectedRouteId={selectedRouteId}
+            text={text}
           />
         </section>
       ))}
@@ -1218,6 +1910,56 @@ function RouteMap({ route }: { route: RouteOption }) {
         <polyline
           className="selected-route-line"
           points={points
+            .map((point) => {
+              const position = projectPoint(point);
+              return `${position.x},${position.y}`;
+            })
+            .join(" ")}
+        />
+        {numberMapPoints(points).map((point) => {
+          const position = projectPoint(point);
+          return (
+            <g key={`${point.order}:${point.place}`} transform={`translate(${position.x} ${position.y})`}>
+              <circle className={mapPointClass(point)} r={point.kind === "focus" ? 10 : 11} />
+              <text className="marker-label" dy="4">{point.marker}</text>
+            </g>
+          );
+        })}
+      </svg>
+      <MapIndex points={numberMapPoints(points)} />
+    </div>
+  );
+}
+
+function RandomTripMap({ trip }: { trip: RandomTripOption }) {
+  const points = buildRandomTripMapPoints(trip);
+  if (points.length < 2) {
+    return (
+      <div className="map-panel">
+        <div className="map-heading">
+          <h3>Route map</h3>
+          <span>Coordinates unavailable for this trip.</span>
+        </div>
+        <div className="map-empty">Trip details are listed below.</div>
+      </div>
+    );
+  }
+
+  const loopPoints = [...points, points[0]];
+
+  return (
+    <div className="map-panel">
+      <div className="map-heading">
+        <h3>Route map</h3>
+        <span>{trip.stops.length} cities, returning to {shortStationName(trip.origin)}</span>
+      </div>
+      <svg className="route-map" role="img" viewBox="0 0 760 420" aria-label="Random trip map">
+        <rect width="760" height="420" rx="8" />
+        <path className="france-shape" d={outlinePath(FRANCE_OUTLINE)} />
+        <path className="france-shape corsica-shape" d={outlinePath(CORSICA_OUTLINE)} />
+        <polyline
+          className="selected-route-line"
+          points={loopPoints
             .map((point) => {
               const position = projectPoint(point);
               return `${position.x},${position.y}`;
@@ -1473,6 +2215,32 @@ function buildRouteMapPoints(route: RouteOption): RouteMapPoint[] {
   const names = [route.legs[0]?.origin, ...route.legs.map((leg) => leg.destination)].filter(
     (name): name is string => Boolean(name)
   );
+  const uniqueNames = names.filter((name, index) => names.findIndex((item) => sameMapCity(item, name)) === index);
+
+  return uniqueNames
+    .map((name, index) => {
+      const coords = resolveStationCoords(name);
+      if (!coords) {
+        return null;
+      }
+
+      return {
+        name: shortStationName(name),
+        place: name,
+        ...coords,
+        kind: index === 0 ? "focus" : "available",
+        count: 1,
+        order: index
+      };
+    })
+    .filter((point): point is RouteMapPoint => Boolean(point));
+}
+
+function buildRandomTripMapPoints(trip: RandomTripOption): RouteMapPoint[] {
+  const names = [
+    trip.origin,
+    ...trip.stops.map((stop) => stop.arrivalLeg.destination)
+  ].filter((name): name is string => Boolean(name));
   const uniqueNames = names.filter((name, index) => names.findIndex((item) => sameMapCity(item, name)) === index);
 
   return uniqueNames
@@ -1774,14 +2542,82 @@ function isRouteSearchMode(mode: SearchMode) {
   return mode === "route" || mode === "flexible";
 }
 
+function isPlannerMode(mode: SearchMode) {
+  return mode === "route" || mode === "flexible" || mode === "random";
+}
+
 function toggleNumber(values: number[], value: number) {
   return values.includes(value)
     ? values.filter((item) => item !== value)
     : [...values, value].sort((a, b) => a - b);
 }
 
-function flexibleCheckLabel(date: string, travelDays: number, legCount: number) {
-  return `${travelDays} dia${travelDays > 1 ? "s" : ""}, ${legCount} trem${legCount > 1 ? "s" : ""}, dia ${date}`;
+function maxRandomCitiesForWindow(startAt: string, endAt: string) {
+  if (!startAt || !endAt) {
+    return 1;
+  }
+
+  const startDate = Date.parse(`${startAt.slice(0, 10)}T00:00:00`);
+  const endDate = Date.parse(`${endAt.slice(0, 10)}T00:00:00`);
+
+  if (Number.isNaN(startDate) || Number.isNaN(endDate) || endDate < startDate) {
+    return 1;
+  }
+
+  const daySpan = Math.floor((endDate - startDate) / 86_400_000);
+  return Math.max(1, daySpan + 1);
+}
+
+function resolveLanguage(value: string) {
+  const normalized = value.toLowerCase();
+  if (normalized.startsWith("pt")) {
+    return "pt";
+  }
+  if (normalized.startsWith("fr")) {
+    return "fr";
+  }
+  if (normalized.startsWith("es")) {
+    return "es";
+  }
+  return "en";
+}
+
+function formatTemplate(template: string, values: Record<string, string>) {
+  return Object.entries(values).reduce(
+    (result, [key, value]) => result.replaceAll(`{${key}}`, value),
+    template
+  );
+}
+
+function flexibleCheckLabel(date: string, travelDays: number, legCount: number, language: Language) {
+  const separator = language === "en" ? "on" : language === "fr" ? "le" : "dia";
+  return `${formatDayLabel(travelDays, language)}, ${formatTrainLabel(legCount, language)}, ${separator} ${date}`;
+}
+
+function formatDayLabel(days: number, language: Language) {
+  if (language === "en") {
+    return `${days} day${days > 1 ? "s" : ""}`;
+  }
+  if (language === "fr") {
+    return `${days} jour${days > 1 ? "s" : ""}`;
+  }
+  if (language === "es") {
+    return `${days} día${days > 1 ? "s" : ""}`;
+  }
+  return `${days} dia${days > 1 ? "s" : ""}`;
+}
+
+function formatTrainLabel(count: number, language: Language) {
+  if (language === "en") {
+    return `${count} train${count > 1 ? "s" : ""}`;
+  }
+  if (language === "fr") {
+    return `${count} train${count > 1 ? "s" : ""}`;
+  }
+  if (language === "es") {
+    return `${count} tren${count > 1 ? "es" : ""}`;
+  }
+  return `${count} trem${count > 1 ? "s" : ""}`;
 }
 
 function mergeRoute(routes: RouteOption[], route: RouteOption) {
@@ -1886,8 +2722,8 @@ async function loadRouteSuggestions(
   }
 }
 
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat("en", {
+function formatDate(value: string, language: Language) {
+  return new Intl.DateTimeFormat(languageLocale(language), {
     weekday: "long",
     month: "short",
     day: "numeric",
@@ -1906,15 +2742,34 @@ function formatDuration(minutes: number) {
   return rest ? `${hours}h ${rest}m` : `${hours}h`;
 }
 
-function formatCheckedAt(value: string) {
-  return new Intl.DateTimeFormat("en", {
+function formatCheckedAt(value: string, language: Language) {
+  return new Intl.DateTimeFormat(languageLocale(language), {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(value));
 }
 
+function languageLocale(language: Language) {
+  if (language === "pt") {
+    return "pt-BR";
+  }
+  if (language === "fr") {
+    return "fr-FR";
+  }
+  if (language === "es") {
+    return "es-ES";
+  }
+  return "en-US";
+}
+
 function todayInputValue() {
   return formatInputDate(new Date());
+}
+
+function addDaysInput(date: string, days: number) {
+  const value = new Date(`${date}T00:00:00`);
+  value.setDate(value.getDate() + days);
+  return formatInputDate(value);
 }
 
 function formatInputDate(date: Date) {

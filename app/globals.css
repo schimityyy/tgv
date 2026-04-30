@@ -105,6 +105,45 @@ button {
     transform 0.18s ease;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.language-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #ffffff;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.language-picker span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 50%;
+  background: #eef8f9;
+  color: var(--accent-strong);
+  font-size: 0.76rem;
+}
+
+.language-picker select {
+  min-height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 800;
+  outline: none;
+}
+
 .refresh-button {
   min-height: 42px;
   padding: 0 16px;
@@ -141,7 +180,7 @@ button {
 
 .tabs {
   display: inline-grid;
-  grid-template-columns: repeat(4, minmax(112px, 1fr));
+  grid-template-columns: repeat(5, minmax(104px, 1fr));
   width: fit-content;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -204,6 +243,13 @@ button {
   align-items: end;
 }
 
+.random-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) repeat(2, minmax(190px, 230px)) auto;
+  gap: 12px;
+  align-items: end;
+}
+
 .choice-panel {
   display: grid;
   grid-column: 1 / -1;
@@ -253,6 +299,30 @@ button {
   width: 17px;
   height: 17px;
   accent-color: var(--accent);
+}
+
+.small-number-input {
+  min-height: 34px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+}
+
+.random-choice-panel {
+  align-items: end;
+  grid-template-columns: minmax(260px, 1fr) minmax(130px, 160px) auto;
+}
+
+.random-tip {
+  display: flex;
+  align-items: center;
+  grid-column: 1 / -1;
+  min-height: 50px;
+}
+
+.random-count-field {
+  min-width: 130px;
 }
 
 .warning-card {
@@ -785,6 +855,13 @@ button {
   gap: 4px;
 }
 
+.route-leg em {
+  color: var(--good);
+  font-size: 0.86rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
 .leg-index {
   display: grid;
   width: 28px;
@@ -937,6 +1014,16 @@ button {
     width: 100%;
   }
 
+  .topbar-actions {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .language-picker {
+    width: 100%;
+  }
+
   .search-band {
     padding: 18px;
   }
@@ -955,6 +1042,7 @@ button {
   }
 
   .flexible-form,
+  .random-form,
   .choice-panel {
     grid-template-columns: 1fr;
   }

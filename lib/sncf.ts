@@ -75,6 +75,35 @@ export type RouteOption = {
 
 export type ReachableDirection = "outbound" | "inbound";
 
+export type RandomTripStop = {
+  city: string;
+  arrivalLeg: TrainAvailability;
+  stayMinutes: number;
+};
+
+export type RandomTripOption = {
+  id: string;
+  origin: string;
+  startAt: string;
+  endAt: string;
+  requestedCities: number;
+  stops: RandomTripStop[];
+  returnLeg: TrainAvailability;
+  totalTravelMinutes: number;
+  totalStayMinutes: number;
+  checkedAt: string;
+};
+
+type RandomTripOptions = {
+  origin: string;
+  startAt: string;
+  endAt: string;
+  cityCount?: number;
+  randomCityCount?: boolean;
+  excludeTripIds?: string[];
+  excludeCities?: string[];
+};
+
 export type FlexibleRouteSearchEvent =
   | {
       type: "meta";
@@ -438,6 +467,474 @@ export async function findReachableRoutes({
     checkedAt: data.checkedAt,
     searchedFrom: searchDate,
     searchedTo: searchDate
+  };
+}
+
+export async function findRandomTrip({
+  origin,
+  startAt,
+  endAt,
+  cityCount = 3,
+  randomCityCount = false,
+  excludeTripIds = [],
+  excludeCities = []
+}: RandomTripOptions) {
+  const startMinute = dateTimeInputToMinute(startAt);
+  const endMinute = dateTimeInputToMinute(endAt);
+
+  if (endMinute - startMinute < 360) {
+    return { trip: null, checkedAt: new Date().toISOString() };
+  }
+
+  const startDate = startAt.slice(0, 10);
+  const endDate = endAt.slice(0, 10);
+  const maxCitiesForWindow = Math.max(1, dateIndex(endDate) - dateIndex(startDate) + 1);
+  const data = await fetchAvailableTrainsBetweenDates(startDate, endDate);
+  const records = data.records
+    .filter((train) => departureMinute(train) >= startMinute && arrivalMinute(train) <= endMinute)
+    .sort((a, b) => departureMinute(a) - departureMinute(b));
+  const targetCityCounts = randomCityCount
+    ? randomCityTargets(maxCitiesForWindow)
+    : [Math.max(1, Math.min(maxCitiesForWindow, cityCount))];
+  const attempts = randomCityCount ? 80 : 50;
+  const excludedTrips = new Set(excludeTripIds);
+  const excludedCityKeys = new Set(excludeCities.map(cityKey));
+  const candidates: RandomTripOption[] = [];
+  const searchProfiles = [
+    { avoidAirports: true, minStayMinutes: 360 },
+    { avoidAirports: true, minStayMinutes: 240 },
+    { avoidAirports: false, minStayMinutes: 180 }
+  ];
+
+  for (const activeExcludedCityKeys of excludedCityKeys.size ? [excludedCityKeys, new Set<string>()] : [excludedCityKeys]) {
+    for (const profile of searchProfiles) {
+      for (const targetCities of targetCityCounts) {
+        candidates.push(
+          ...findLoopRandomTrips(records, {
+            checkedAt: data.checkedAt,
+            endAt,
+            excludedCityKeys: activeExcludedCityKeys,
+            minStayMinutes: profile.minStayMinutes,
+            origin,
+            startAt,
+            targetCities,
+            avoidAirports: profile.avoidAirports
+          }).filter((trip) => !excludedTrips.has(trip.id))
+        );
+
+        for (let attempt = 0; attempt < attempts / 2; attempt += 1) {
+          const trip = buildRandomTripAttempt(records, {
+            origin,
+            startAt,
+            endAt,
+            targetCities,
+            checkedAt: data.checkedAt,
+            excludedCityKeys: activeExcludedCityKeys,
+            forceReturnDate: undefined,
+            looseness: attempt,
+            minStayMinutes: profile.minStayMinutes,
+            avoidAirports: profile.avoidAirports
+          });
+
+          if (trip && !excludedTrips.has(trip.id)) {
+            candidates.push(trip);
+          }
+        }
+
+        if (randomCityCount && targetCities <= 2) {
+          candidates.push(
+            ...findTwoCityRandomTrips(records, {
+              checkedAt: data.checkedAt,
+              endAt,
+              excludedCityKeys: activeExcludedCityKeys,
+              forceReturnDate: undefined,
+              minStayMinutes: profile.minStayMinutes,
+              origin,
+              startAt,
+              avoidAirports: profile.avoidAirports
+            }).filter((trip) => !excludedTrips.has(trip.id))
+          );
+        }
+
+        const candidatesForTarget = dedupeRandomTrips(candidates).filter((trip) => trip.stops.length === targetCities);
+
+        if (randomCityCount && candidatesForTarget.length) {
+          break;
+        }
+      }
+
+      if (candidates.length) {
+        break;
+      }
+    }
+
+    if (candidates.length) {
+      break;
+    }
+  }
+
+  return {
+    trip: pickRandomTrip(dedupeRandomTrips(candidates), excludedCityKeys),
+    checkedAt: data.checkedAt
+  };
+}
+
+function buildRandomTripAttempt(
+  records: TrainAvailability[],
+  {
+    checkedAt,
+    endAt,
+    excludedCityKeys,
+    forceReturnDate,
+    looseness,
+    minStayMinutes,
+    origin,
+    startAt,
+    targetCities,
+    avoidAirports
+  }: {
+    checkedAt: string;
+    endAt: string;
+    excludedCityKeys: Set<string>;
+    forceReturnDate?: string;
+    looseness: number;
+    minStayMinutes: number;
+    origin: string;
+    startAt: string;
+    targetCities: number;
+    avoidAirports: boolean;
+  }
+): RandomTripOption | null {
+  const endMinute = dateTimeInputToMinute(endAt);
+  let currentPlace = origin;
+  let currentMinute = dateTimeInputToMinute(startAt);
+  const visitedCities = new Set([cityKey(origin)]);
+  const stops: RandomTripStop[] = [];
+
+  for (let stopIndex = 0; stopIndex < targetCities; stopIndex += 1) {
+    const remainingStopsAfterThis = targetCities - stopIndex - 1;
+    const latestArrival = endMinute - minStayMinutes - remainingStopsAfterThis * (minStayMinutes + 90) - 60;
+    const candidates = records
+      .filter((train) => {
+        const destinationKey = cityKey(train.destination);
+        return (
+          sameCity(train.origin, currentPlace) &&
+          !sameCity(train.destination, origin) &&
+          !visitedCities.has(destinationKey) &&
+          !excludedCityKeys.has(destinationKey) &&
+          (!avoidAirports || !isAirportStation(train.destination)) &&
+          departureMinute(train) >= currentMinute &&
+          arrivalMinute(train) <= latestArrival
+        );
+      })
+      .sort((a, b) => scoreOutboundRandomLeg(b, currentMinute) - scoreOutboundRandomLeg(a, currentMinute));
+
+    const nextLeg = pickFromTop(candidates, looseness);
+    if (!nextLeg) {
+      return null;
+    }
+
+    const nextCity = cityKey(nextLeg.destination);
+    visitedCities.add(nextCity);
+    stops.push({
+      city: stationCityLabel(nextLeg.destination),
+      arrivalLeg: nextLeg,
+      stayMinutes: 0
+    });
+    currentPlace = nextLeg.destination;
+    currentMinute = arrivalMinute(nextLeg) + minStayMinutes;
+  }
+
+  const returnCandidates = records
+    .filter((train) => {
+      return (
+        sameCity(train.origin, currentPlace) &&
+        stationMatches(train.destination, origin) &&
+        (!forceReturnDate || minuteToDate(arrivalMinute(train)) === forceReturnDate) &&
+        departureMinute(train) >= currentMinute &&
+        arrivalMinute(train) <= endMinute
+      );
+    })
+    .sort((a, b) => scoreReturnRandomLeg(b, endMinute) - scoreReturnRandomLeg(a, endMinute));
+  const returnLeg = pickFromTop(returnCandidates, looseness);
+
+  if (!returnLeg) {
+    return null;
+  }
+
+  const legs = [...stops.map((stop) => stop.arrivalLeg), returnLeg];
+  const totalTravelMinutes = legs.reduce(
+    (sum, leg) => sum + arrivalMinute(leg) - departureMinute(leg),
+    0
+  );
+
+  const stopsWithStay = stops.map((stop, index) => {
+    const nextLeg = legs[index + 1];
+    return {
+      ...stop,
+      stayMinutes: nextLeg ? Math.max(0, departureMinute(nextLeg) - arrivalMinute(stop.arrivalLeg)) : 0
+    };
+  });
+  const totalStayMinutes = stopsWithStay.reduce((sum, stop) => sum + stop.stayMinutes, 0);
+
+  return {
+    id: legs.map((leg) => leg.id).join("|"),
+    origin,
+    startAt,
+    endAt,
+    requestedCities: targetCities,
+    stops: stopsWithStay,
+    returnLeg,
+    totalTravelMinutes,
+    totalStayMinutes,
+    checkedAt
+  };
+}
+
+function findTwoCityRandomTrips(
+  records: TrainAvailability[],
+  {
+    checkedAt,
+    endAt,
+    excludedCityKeys,
+    forceReturnDate,
+    minStayMinutes,
+    origin,
+    startAt,
+    avoidAirports
+  }: {
+    checkedAt: string;
+    endAt: string;
+    excludedCityKeys: Set<string>;
+    forceReturnDate?: string;
+    minStayMinutes: number;
+    origin: string;
+    startAt: string;
+    avoidAirports: boolean;
+  }
+) {
+  const startMinute = dateTimeInputToMinute(startAt);
+  const endMinute = dateTimeInputToMinute(endAt);
+  const firstLegs = records
+    .filter((train) => {
+      return (
+        stationMatches(train.origin, origin) &&
+        !sameCity(train.destination, origin) &&
+        !excludedCityKeys.has(cityKey(train.destination)) &&
+        (!avoidAirports || !isAirportStation(train.destination)) &&
+        departureMinute(train) >= startMinute &&
+        arrivalMinute(train) <= endMinute
+      );
+    })
+    .sort((a, b) => scoreOutboundRandomLeg(b, startMinute) - scoreOutboundRandomLeg(a, startMinute))
+    .slice(0, 90);
+  const trips: RandomTripOption[] = [];
+
+  for (const firstLeg of firstLegs) {
+    const secondLegs = records
+      .filter((train) => {
+        return (
+          sameCity(train.origin, firstLeg.destination) &&
+          !sameCity(train.destination, origin) &&
+          !sameCity(train.destination, firstLeg.destination) &&
+          !excludedCityKeys.has(cityKey(train.destination)) &&
+          (!avoidAirports || !isAirportStation(train.destination)) &&
+          departureMinute(train) >= arrivalMinute(firstLeg) + minStayMinutes &&
+          arrivalMinute(train) <= endMinute
+        );
+      })
+      .sort((a, b) => scoreOutboundRandomLeg(b, arrivalMinute(firstLeg)) - scoreOutboundRandomLeg(a, arrivalMinute(firstLeg)))
+      .slice(0, 30);
+
+    for (const secondLeg of secondLegs) {
+      const returnLegs = records
+        .filter((train) => {
+          return (
+            sameCity(train.origin, secondLeg.destination) &&
+            stationMatches(train.destination, origin) &&
+            (!forceReturnDate || minuteToDate(arrivalMinute(train)) === forceReturnDate) &&
+            departureMinute(train) >= arrivalMinute(secondLeg) + minStayMinutes &&
+            arrivalMinute(train) <= endMinute
+          );
+        })
+        .sort((a, b) => scoreReturnRandomLeg(b, endMinute) - scoreReturnRandomLeg(a, endMinute))
+        .slice(0, 8);
+
+      for (const returnLeg of returnLegs) {
+        trips.push(
+          randomTripFromLegs({
+            checkedAt,
+            endAt,
+            legs: [firstLeg, secondLeg, returnLeg],
+            origin,
+            requestedCities: 2,
+            startAt
+          })
+        );
+      }
+    }
+  }
+
+  return trips;
+}
+
+function findLoopRandomTrips(
+  records: TrainAvailability[],
+  {
+    checkedAt,
+    endAt,
+    excludedCityKeys,
+    minStayMinutes,
+    origin,
+    startAt,
+    targetCities,
+    avoidAirports
+  }: {
+    checkedAt: string;
+    endAt: string;
+    excludedCityKeys: Set<string>;
+    minStayMinutes: number;
+    origin: string;
+    startAt: string;
+    targetCities: number;
+    avoidAirports: boolean;
+  }
+) {
+  const startMinute = dateTimeInputToMinute(startAt);
+  const endMinute = dateTimeInputToMinute(endAt);
+  const maxBranch = targetCities <= 2 ? 90 : 42;
+  type PartialLoop = {
+    currentPlace: string;
+    legs: TrainAvailability[];
+    minute: number;
+    score: number;
+    visited: Set<string>;
+  };
+  let partials: PartialLoop[] = [
+    {
+      currentPlace: origin,
+      legs: [],
+      minute: startMinute,
+      score: 0,
+      visited: new Set([cityKey(origin)])
+    }
+  ];
+
+  for (let depth = 0; depth < targetCities; depth += 1) {
+    const expanded: PartialLoop[] = [];
+
+    for (const partial of partials) {
+      const options = records
+        .filter((train) => {
+          const destinationKey = cityKey(train.destination);
+          return (
+            (partial.legs.length ? sameCity(train.origin, partial.currentPlace) : stationMatches(train.origin, origin)) &&
+            !sameCity(train.destination, origin) &&
+            !partial.visited.has(destinationKey) &&
+            !excludedCityKeys.has(destinationKey) &&
+            (!avoidAirports || !isAirportStation(train.destination)) &&
+            departureMinute(train) >= partial.minute &&
+            arrivalMinute(train) <= endMinute - minStayMinutes
+          );
+        })
+        .sort((a, b) => scoreLoopLeg(b, partial.minute, endMinute, depth) - scoreLoopLeg(a, partial.minute, endMinute, depth))
+        .slice(0, maxBranch);
+
+      for (const leg of diversifyLegsByCity(options, Math.max(12, Math.floor(maxBranch / 2)))) {
+        const visited = new Set(partial.visited);
+        visited.add(cityKey(leg.destination));
+        expanded.push({
+          currentPlace: leg.destination,
+          legs: [...partial.legs, leg],
+          minute: arrivalMinute(leg) + minStayMinutes,
+          score: partial.score + scoreLoopLeg(leg, partial.minute, endMinute, depth),
+          visited
+        });
+      }
+    }
+
+    partials = expanded
+      .sort((a, b) => b.score - a.score + Math.random() * 80 - 40)
+      .slice(0, targetCities <= 2 ? 180 : 90);
+
+    if (!partials.length) {
+      return [];
+    }
+  }
+
+  const trips: RandomTripOption[] = [];
+
+  for (const partial of partials) {
+    const returnOptions = records
+      .filter((train) => {
+        return (
+          sameCity(train.origin, partial.currentPlace) &&
+          stationMatches(train.destination, origin) &&
+          departureMinute(train) >= partial.minute &&
+          arrivalMinute(train) <= endMinute
+        );
+      })
+      .sort((a, b) => scoreReturnRandomLeg(b, endMinute) - scoreReturnRandomLeg(a, endMinute))
+      .slice(0, 12);
+
+    for (const returnLeg of returnOptions) {
+      trips.push(
+        randomTripFromLegs({
+          checkedAt,
+          endAt,
+          legs: [...partial.legs, returnLeg],
+          origin,
+          requestedCities: targetCities,
+          startAt
+        })
+      );
+    }
+  }
+
+  return trips;
+}
+
+function randomTripFromLegs({
+  checkedAt,
+  endAt,
+  legs,
+  origin,
+  requestedCities,
+  startAt
+}: {
+  checkedAt: string;
+  endAt: string;
+  legs: TrainAvailability[];
+  origin: string;
+  requestedCities: number;
+  startAt: string;
+}): RandomTripOption {
+  const stopLegs = legs.slice(0, -1);
+  const returnLeg = legs[legs.length - 1];
+  const totalTravelMinutes = legs.reduce(
+    (sum, leg) => sum + arrivalMinute(leg) - departureMinute(leg),
+    0
+  );
+  const stops = stopLegs.map((leg, index) => {
+    const nextLeg = legs[index + 1];
+    return {
+      city: stationCityLabel(leg.destination),
+      arrivalLeg: leg,
+      stayMinutes: nextLeg ? Math.max(0, departureMinute(nextLeg) - arrivalMinute(leg)) : 0
+    };
+  });
+
+  return {
+    id: legs.map((leg) => leg.id).join("|"),
+    origin,
+    startAt,
+    endAt,
+    requestedCities,
+    stops,
+    returnLeg,
+    totalTravelMinutes,
+    totalStayMinutes: stops.reduce((sum, stop) => sum + stop.stayMinutes, 0),
+    checkedAt
   };
 }
 
@@ -928,6 +1425,155 @@ function routeArrivalMinute(route: RouteOption) {
   return arrivalMinute(route.legs[route.legs.length - 1]);
 }
 
+function scoreOutboundRandomLeg(train: TrainAvailability, currentMinute: number) {
+  const depart = departureMinute(train);
+  const wait = Math.max(0, depart - currentMinute);
+  const localDepart = timeToMinutes(train.departureTime);
+  const localArrival = timeToMinutes(train.arrivalTime);
+  const morningBonus = 720 - Math.abs(localDepart - 540);
+  const usefulDayBonus = 780 - Math.abs(localArrival - 660);
+
+  return morningBonus + usefulDayBonus - wait / 4 + Math.random() * 120;
+}
+
+function scoreReturnRandomLeg(train: TrainAvailability, endMinute: number) {
+  const arrive = arrivalMinute(train);
+  const localDepart = timeToMinutes(train.departureTime);
+  const eveningBonus = 720 - Math.abs(localDepart - 1080);
+
+  return eveningBonus - Math.abs(endMinute - arrive) / 3 + Math.random() * 80;
+}
+
+function scoreLoopLeg(train: TrainAvailability, currentMinute: number, endMinute: number, depth: number) {
+  const depart = departureMinute(train);
+  const arrive = arrivalMinute(train);
+  const localDepart = timeToMinutes(train.departureTime);
+  const wait = Math.max(0, depart - currentMinute);
+  const travel = Math.max(1, arrive - depart);
+  const dayUseBonus = depth === 0 ? 620 - Math.abs(localDepart - 570) : 520 - Math.abs(localDepart - 660);
+  const windowUseBonus = Math.min(900, Math.max(0, endMinute - arrive) / 3);
+
+  return dayUseBonus + windowUseBonus - wait / 5 - travel / 3 + Math.random() * 160;
+}
+
+function diversifyLegsByCity(legs: TrainAvailability[], limit: number) {
+  const firstByCity = new Map<string, TrainAvailability>();
+  const leftovers: TrainAvailability[] = [];
+
+  for (const leg of legs) {
+    const key = cityKey(leg.destination);
+    if (!firstByCity.has(key)) {
+      firstByCity.set(key, leg);
+    } else {
+      leftovers.push(leg);
+    }
+  }
+
+  return [...firstByCity.values(), ...leftovers].slice(0, limit);
+}
+
+function pickFromTop<T>(items: T[], looseness: number) {
+  if (!items.length) {
+    return null;
+  }
+
+  const topCount = Math.min(items.length, Math.max(2, 4 + (looseness % 5)));
+  return items[Math.floor(Math.random() * topCount)];
+}
+
+function scoreRandomTrip(trip: RandomTripOption) {
+  return (
+    trip.stops.length * 2000 +
+    trip.totalStayMinutes * 3 -
+    trip.totalTravelMinutes +
+    Math.random() * 100
+  );
+}
+
+function dedupeRandomTrips(trips: RandomTripOption[]) {
+  return Array.from(new Map(trips.map((trip) => [trip.id, trip])).values());
+}
+
+function pickRandomTrip(trips: RandomTripOption[], excludedCityKeys: Set<string>) {
+  if (!trips.length) {
+    return null;
+  }
+
+  const rankedTrips = trips
+    .map((trip) => ({
+      score: scoreRandomTrip(trip) - cityRepeatPenalty(trip, excludedCityKeys) + Math.random() * 600,
+      trip
+    }))
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.trip);
+  const bySignature = new Map<string, RandomTripOption>();
+
+  for (const trip of rankedTrips) {
+    const signature = tripCitySignature(trip);
+    if (!bySignature.has(signature)) {
+      bySignature.set(signature, trip);
+    }
+  }
+
+  const diverseTrips = [...bySignature.values()].slice(0, Math.min(bySignature.size, 14));
+  const topTrips = diverseTrips.length ? diverseTrips : rankedTrips.slice(0, Math.min(rankedTrips.length, 8));
+  return weightedRandomTrip(topTrips, excludedCityKeys);
+}
+
+function weightedRandomTrip(trips: RandomTripOption[], excludedCityKeys: Set<string>) {
+  const weights = trips.map((trip, index) => {
+    const score = scoreRandomTrip(trip) - cityRepeatPenalty(trip, excludedCityKeys) - index * 120;
+    return Math.max(1, score);
+  });
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  let roll = Math.random() * total;
+
+  for (let index = 0; index < trips.length; index += 1) {
+    roll -= weights[index];
+    if (roll <= 0) {
+      return trips[index];
+    }
+  }
+
+  return trips[trips.length - 1];
+}
+
+function cityRepeatPenalty(trip: RandomTripOption, excludedCityKeys: Set<string>) {
+  return trip.stops.reduce((penalty, stop) => {
+    return penalty + (excludedCityKeys.has(cityKey(stop.city || stop.arrivalLeg.destination)) ? 3500 : 0);
+  }, 0);
+}
+
+function tripCitySignature(trip: RandomTripOption) {
+  return trip.stops
+    .map((stop) => cityKey(stop.city || stop.arrivalLeg.destination))
+    .sort()
+    .join("|");
+}
+
+function isAirportStation(station: string) {
+  const normalized = normalizeText(station);
+  return (
+    normalized.includes("aeroport") ||
+    normalized.includes("airport") ||
+    normalized.includes("roissy") ||
+    normalized.includes("orly") ||
+    normalized.includes("cdg")
+  );
+}
+
+function randomCityTargets(maxCitiesForWindow: number) {
+  const maxCities = Math.min(5, Math.max(1, maxCitiesForWindow));
+  const minCities = maxCitiesForWindow >= 2 ? 2 : 1;
+  const targets: number[] = [];
+
+  for (let count = maxCities; count >= minCities; count -= 1) {
+    targets.push(count);
+  }
+
+  return targets;
+}
+
 function sameCity(a: string, b: string) {
   return cityKey(a) === cityKey(b);
 }
@@ -954,6 +1600,11 @@ function arrivalMinute(train: TrainAvailability) {
 
 function dateIndex(date: string) {
   return Math.floor(Date.parse(`${date}T00:00:00Z`) / 86400000);
+}
+
+function dateTimeInputToMinute(value: string) {
+  const [date = formatDateInput(new Date()), time = "00:00"] = value.split("T");
+  return dateIndex(date) * 1440 + timeToMinutes(time);
 }
 
 function currentFranceMinute() {
