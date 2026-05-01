@@ -1179,7 +1179,7 @@ export function stationMatches(station: string, query: string) {
   return normalizedStation === normalizedQuery || normalizedStation.includes(normalizedQuery);
 }
 
-async function fetchAvailableTrainsBetweenDates(
+export async function fetchAvailableTrainsBetweenDates(
   startDate: string,
   endDate: string,
   options?: { maxRecords?: number }

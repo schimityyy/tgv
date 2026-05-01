@@ -1,9 +1,13 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { BusLeg, BusProvider, BusRouteOption } from "@/lib/bus";
+import type { MultimodalRouteOption } from "@/lib/multimodal";
 import type { RandomTripOption, RouteOption, TrainAvailability } from "@/lib/sncf";
 
+type WorkspaceMode = "tgv" | "bus" | "advanced";
 type SearchMode = "outbound" | "inbound" | "route" | "flexible" | "random";
+type BusSearchMode = "from" | "to" | "route";
 type Status = "idle" | "loading" | "success" | "empty" | "error";
 type Language = "en" | "pt" | "fr" | "es";
 
@@ -51,6 +55,29 @@ type RoutesResponse = {
 type RandomTripResponse = {
   trip: RandomTripOption | null;
   checkedAt: string;
+  error?: string;
+};
+
+type BusTripsResponse = {
+  legs: BusLeg[];
+  checkedAt: string;
+  totalCount: number;
+  error?: string;
+};
+
+type BusRoutesResponse = {
+  routes: BusRouteOption[];
+  checkedAt: string;
+  searchedFrom: string;
+  searchedTo: string;
+  error?: string;
+};
+
+type MultimodalRoutesResponse = {
+  routes: MultimodalRouteOption[];
+  checkedAt: string;
+  searchedFrom: string;
+  searchedTo: string;
   error?: string;
 };
 
@@ -226,7 +253,52 @@ const COPY: Record<Language, Record<string, string>> = {
     backHome: "Back home",
     stay: "{duration} to explore",
     totalStay: "{duration} exploring",
-    totalTravel: "{duration} on trains"
+    totalTravel: "{duration} on trains",
+    tgvWorkspace: "TGVmax",
+    busWorkspace: "Bus",
+    advancedWorkspace: "Advanced",
+    busFromTab: "From",
+    busToTab: "To",
+    busRouteTab: "Route",
+    busTitle: "Find FlixBus and BlaBlaCar Bus options.",
+    busIntro: "Use GTFS schedules to scan direct bus departures, arrivals, and simple connections.",
+    busFromTitle: "Find buses leaving from a city.",
+    busToTitle: "Find buses arriving in a city.",
+    busRouteTitle: "Search a bus route on one date.",
+    busFromIntro: "Pick a departure stop or city and see where the bus network can take you.",
+    busToIntro: "Pick an arrival stop or city and see where buses can leave from.",
+    busRouteIntro: "Search direct buses and one-transfer bus routes for the selected date.",
+    providerFilter: "Companies",
+    searchBuses: "Search buses",
+    findBusRoute: "Find bus route",
+    loadingBus: "Reading GTFS bus schedules...",
+    loadingBusDetail: "Checking FlixBus and BlaBlaCar Bus departures for this date.",
+    startBusFrom: "Start with a bus origin.",
+    startBusTo: "Start with a bus destination.",
+    startBusRoute: "Start with a bus origin, destination, and date.",
+    busEmpty: "No bus option was found for this search.",
+    busDirect: "Direct bus",
+    busConnection: "Bus connection",
+    busWord: "Bus",
+    refreshBus: "Refresh bus GTFS",
+    refreshAll: "Refresh all data",
+    advancedTitle: "Bridge impossible routes with TGVmax + bus.",
+    advancedIntro: "Searches TGVmax to a bus-friendly city, adds a short FlixBus or BlaBlaCar hop, then finds another TGVmax leg to the final city.",
+    advancedStart: "Start with origin, destination, and the bridge limits you can accept.",
+    advancedSearch: "Find bridge route",
+    advancedLoading: "Searching TGV + bus bridges...",
+    advancedLoadingDetail: "Combining MAX seats with short GTFS bus legs.",
+    advancedEmpty: "No TGV + bus + TGV bridge was found inside these limits.",
+    maxBusTime: "Max bus time",
+    maxTravelDays: "Trip can last",
+    shortBusHint: "GTFS does not include prices; the advanced search ranks shorter bus hops first as a cheap-leg proxy.",
+    trainLeg: "TGVmax",
+    busLeg: "Bus bridge",
+    totalBus: "{duration} by bus",
+    totalWait: "{duration} waiting",
+    totalRoute: "{duration} total",
+    waitBefore: "{duration} wait before this leg",
+    noBusCompany: "No bus company selected: advanced search becomes a regular TGVmax search."
   },
   pt: {
     brandSubtitle: "Assentos MAX JEUNE e MAX SENIOR disponíveis nos dados abertos da SNCF.",
@@ -319,7 +391,52 @@ const COPY: Record<Language, Record<string, string>> = {
     backHome: "Volta para casa",
     stay: "{duration} para explorar",
     totalStay: "{duration} explorando",
-    totalTravel: "{duration} em trens"
+    totalTravel: "{duration} em trens",
+    tgvWorkspace: "TGVmax",
+    busWorkspace: "Onibus",
+    advancedWorkspace: "Avancado",
+    busFromTab: "De",
+    busToTab: "Para",
+    busRouteTab: "Rota",
+    busTitle: "Encontre opcoes de FlixBus e BlaBlaCar Bus.",
+    busIntro: "Use horarios GTFS para ver saidas, chegadas e conexoes simples de onibus.",
+    busFromTitle: "Encontre onibus saindo de uma cidade.",
+    busToTitle: "Encontre onibus chegando em uma cidade.",
+    busRouteTitle: "Busque uma rota de onibus em uma data.",
+    busFromIntro: "Escolha uma parada ou cidade de saida e veja ate onde a rede de onibus leva.",
+    busToIntro: "Escolha uma parada ou cidade de chegada e veja de onde os onibus podem sair.",
+    busRouteIntro: "Busca onibus diretos e rotas com uma conexao para a data escolhida.",
+    providerFilter: "Empresas",
+    searchBuses: "Buscar onibus",
+    findBusRoute: "Buscar rota de onibus",
+    loadingBus: "Lendo horarios GTFS de onibus...",
+    loadingBusDetail: "Checando partidas FlixBus e BlaBlaCar Bus para esta data.",
+    startBusFrom: "Comece com uma origem de onibus.",
+    startBusTo: "Comece com um destino de onibus.",
+    startBusRoute: "Comece com origem, destino e data para onibus.",
+    busEmpty: "Nenhuma opcao de onibus foi encontrada para esta busca.",
+    busDirect: "Onibus direto",
+    busConnection: "Conexao de onibus",
+    busWord: "Onibus",
+    refreshBus: "Atualizar GTFS de onibus",
+    refreshAll: "Atualizar todos os dados",
+    advancedTitle: "Costure rotas impossiveis com TGVmax + onibus.",
+    advancedIntro: "Busca TGVmax ate uma cidade boa para onibus, adiciona um trecho curto FlixBus ou BlaBlaCar, e depois encontra outro TGVmax ate o destino final.",
+    advancedStart: "Comece com origem, destino e limites de ponte que voce aceita.",
+    advancedSearch: "Encontrar rota ponte",
+    advancedLoading: "Buscando pontes TGV + onibus...",
+    advancedLoadingDetail: "Combinando assentos MAX com trechos curtos de onibus via GTFS.",
+    advancedEmpty: "Nenhuma ponte TGV + onibus + TGV foi encontrada dentro desses limites.",
+    maxBusTime: "Tempo max. de onibus",
+    maxTravelDays: "Viagem pode durar",
+    shortBusHint: "GTFS nao inclui precos; a busca avancada prioriza trechos curtos de onibus como proxy de economia.",
+    trainLeg: "TGVmax",
+    busLeg: "Ponte de onibus",
+    totalBus: "{duration} de onibus",
+    totalWait: "{duration} esperando",
+    totalRoute: "{duration} no total",
+    waitBefore: "{duration} de espera antes deste trecho",
+    noBusCompany: "Nenhuma empresa selecionada: a busca avancada vira uma busca normal de TGVmax."
   },
   fr: {
     brandSubtitle: "Places MAX JEUNE et MAX SENIOR disponibles depuis les données ouvertes SNCF.",
@@ -603,7 +720,9 @@ const MAP_BOUNDS = {
 
 export default function Home() {
   const [language, setLanguage] = useState<Language>("en");
+  const [workspace, setWorkspace] = useState<WorkspaceMode>("tgv");
   const [mode, setMode] = useState<SearchMode>("outbound");
+  const [busMode, setBusMode] = useState<BusSearchMode>("from");
   const [station, setStation] = useState("");
   const [date, setDate] = useState("");
   const [nightOnly, setNightOnly] = useState(false);
@@ -623,6 +742,28 @@ export default function Home() {
   const [randomEndAt, setRandomEndAt] = useState("");
   const [randomCityCount, setRandomCityCount] = useState(3);
   const [randomCityMode, setRandomCityMode] = useState<RandomCityMode>("fixed");
+  const [busStation, setBusStation] = useState("");
+  const [busOrigin, setBusOrigin] = useState("");
+  const [busDestination, setBusDestination] = useState("");
+  const [busDate, setBusDate] = useState("");
+  const [busProviders, setBusProviders] = useState<BusProvider[]>(["flixbus", "blablacar"]);
+  const [busSuggestions, setBusSuggestions] = useState<string[]>([]);
+  const [busOriginSuggestions, setBusOriginSuggestions] = useState<string[]>([]);
+  const [busDestinationSuggestions, setBusDestinationSuggestions] = useState<string[]>([]);
+  const [busLegs, setBusLegs] = useState<BusLeg[]>([]);
+  const [busRoutes, setBusRoutes] = useState<BusRouteOption[]>([]);
+  const [selectedBusRouteId, setSelectedBusRouteId] = useState("");
+  const [advancedOrigin, setAdvancedOrigin] = useState("");
+  const [advancedDestination, setAdvancedDestination] = useState("");
+  const [advancedDate, setAdvancedDate] = useState("");
+  const [advancedTime, setAdvancedTime] = useState("");
+  const [advancedProviders, setAdvancedProviders] = useState<BusProvider[]>(["flixbus", "blablacar"]);
+  const [advancedOriginSuggestions, setAdvancedOriginSuggestions] = useState<string[]>([]);
+  const [advancedDestinationSuggestions, setAdvancedDestinationSuggestions] = useState<string[]>([]);
+  const [advancedMaxBusMinutes, setAdvancedMaxBusMinutes] = useState(180);
+  const [advancedTravelDays, setAdvancedTravelDays] = useState(2);
+  const [advancedRoutes, setAdvancedRoutes] = useState<MultimodalRouteOption[]>([]);
+  const [selectedAdvancedRouteId, setSelectedAdvancedRouteId] = useState("");
   const [flexLegCounts, setFlexLegCounts] = useState<number[]>([1, 2, 3]);
   const [flexTravelDays, setFlexTravelDays] = useState<number[]>([1, 2, 3]);
   const [flexState, setFlexState] = useState<FlexibleSearchState>({
@@ -642,7 +783,7 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const flexAbortRef = useRef<AbortController | null>(null);
-  const text = COPY[language];
+  const text = { ...COPY.en, ...COPY[language] };
   const randomMaxCities = useMemo(
     () => maxRandomCitiesForWindow(randomStartAt, randomEndAt),
     [randomEndAt, randomStartAt]
@@ -657,6 +798,9 @@ export default function Home() {
     const today = todayInputValue();
     setDate(today);
     setRouteDate(today);
+    setBusDate(today);
+    setAdvancedDate(today);
+    setAdvancedTime("08:00");
     setRandomStartAt(`${today}T08:00`);
     setRandomEndAt(`${addDaysInput(today, 3)}T22:00`);
   }, []);
@@ -675,6 +819,36 @@ export default function Home() {
     setSelectedRouteId("");
     setStatus("idle");
     setError("");
+  }
+
+  function swapBusRouteEndpoints() {
+    setBusOrigin(busDestination);
+    setBusDestination(busOrigin);
+    setBusOriginSuggestions([]);
+    setBusDestinationSuggestions([]);
+    setBusRoutes([]);
+    setSelectedBusRouteId("");
+    setStatus("idle");
+    setError("");
+  }
+
+  function swapAdvancedEndpoints() {
+    setAdvancedOrigin(advancedDestination);
+    setAdvancedDestination(advancedOrigin);
+    setAdvancedOriginSuggestions([]);
+    setAdvancedDestinationSuggestions([]);
+    setAdvancedRoutes([]);
+    setSelectedAdvancedRouteId("");
+    setStatus("idle");
+    setError("");
+  }
+
+  function toggleBusProvider(provider: BusProvider) {
+    setBusProviders((current) => toggleProviderSelection(current, provider));
+  }
+
+  function toggleAdvancedProvider(provider: BusProvider) {
+    setAdvancedProviders((current) => toggleProviderSelection(current, provider, true));
   }
 
   useEffect(() => {
@@ -701,6 +875,35 @@ export default function Home() {
   }, [mode]);
 
   useEffect(() => {
+    flexAbortRef.current?.abort();
+    flexAbortRef.current = null;
+    setSuggestions([]);
+    setBusSuggestions([]);
+    setBusOriginSuggestions([]);
+    setBusDestinationSuggestions([]);
+    setAdvancedOriginSuggestions([]);
+    setAdvancedDestinationSuggestions([]);
+    setTrains([]);
+    setReturnLookups({});
+    setRoutes([]);
+    setRandomTrip(null);
+    setBusLegs([]);
+    setBusRoutes([]);
+    setSelectedBusRouteId("");
+    setAdvancedRoutes([]);
+    setSelectedAdvancedRouteId("");
+    setStatus("idle");
+    setError("");
+    setFlexState((current) => ({
+      ...current,
+      isSearching: false,
+      message: "",
+      currentCheck: "",
+      foundCount: 0
+    }));
+  }, [workspace, busMode]);
+
+  useEffect(() => {
     return () => {
       flexAbortRef.current?.abort();
     };
@@ -716,7 +919,7 @@ export default function Home() {
   }, [randomCityCount, randomCityMode, randomEndAt, randomStartAt, routeOrigin]);
 
   useEffect(() => {
-    if (isPlannerMode(mode) || station.trim().length < 2) {
+    if (workspace !== "tgv" || isPlannerMode(mode) || station.trim().length < 2) {
       setSuggestions([]);
       return;
     }
@@ -747,23 +950,70 @@ export default function Home() {
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [mode, station]);
+  }, [mode, station, workspace]);
 
   useEffect(() => {
-    if (!isPlannerMode(mode)) {
+    if (workspace !== "tgv" || !isPlannerMode(mode)) {
       return;
     }
 
     loadRouteSuggestions(routeOrigin, "origin", setRouteOriginSuggestions);
-  }, [mode, routeOrigin]);
+  }, [mode, routeOrigin, workspace]);
 
   useEffect(() => {
-    if (mode === "random" || !isPlannerMode(mode)) {
+    if (workspace !== "tgv" || mode === "random" || !isPlannerMode(mode)) {
       return;
     }
 
     loadRouteSuggestions(routeDestination, "destination", setRouteDestinationSuggestions);
-  }, [mode, routeDestination]);
+  }, [mode, routeDestination, workspace]);
+
+  useEffect(() => {
+    if (workspace !== "bus" || busMode === "route" || busStation.trim().length < 2) {
+      setBusSuggestions([]);
+      return;
+    }
+
+    loadBusSuggestions(
+      busStation,
+      busMode === "from" ? "origin" : "destination",
+      busProviders,
+      setBusSuggestions,
+      setCheckedAt
+    );
+  }, [busMode, busProviders, busStation, workspace]);
+
+  useEffect(() => {
+    if (workspace !== "bus" || busMode !== "route") {
+      return;
+    }
+
+    loadBusSuggestions(busOrigin, "origin", busProviders, setBusOriginSuggestions, setCheckedAt);
+  }, [busMode, busOrigin, busProviders, workspace]);
+
+  useEffect(() => {
+    if (workspace !== "bus" || busMode !== "route") {
+      return;
+    }
+
+    loadBusSuggestions(busDestination, "destination", busProviders, setBusDestinationSuggestions, setCheckedAt);
+  }, [busDestination, busMode, busProviders, workspace]);
+
+  useEffect(() => {
+    if (workspace !== "advanced") {
+      return;
+    }
+
+    loadRouteSuggestions(advancedOrigin, "origin", setAdvancedOriginSuggestions);
+  }, [advancedOrigin, workspace]);
+
+  useEffect(() => {
+    if (workspace !== "advanced") {
+      return;
+    }
+
+    loadRouteSuggestions(advancedDestination, "destination", setAdvancedDestinationSuggestions);
+  }, [advancedDestination, workspace]);
 
   const groupedResults = useMemo(() => groupTrains(trains, mode), [mode, trains]);
   const mapPoints = useMemo(() => buildMapPoints(trains, station, mode), [mode, station, trains]);
@@ -774,6 +1024,14 @@ export default function Home() {
   const selectedRoute = useMemo(
     () => displayRoutes.find((route) => route.id === selectedRouteId) ?? displayRoutes[0],
     [displayRoutes, selectedRouteId]
+  );
+  const selectedBusRoute = useMemo(
+    () => busRoutes.find((route) => route.id === selectedBusRouteId) ?? busRoutes[0],
+    [busRoutes, selectedBusRouteId]
+  );
+  const selectedAdvancedRoute = useMemo(
+    () => advancedRoutes.find((route) => route.id === selectedAdvancedRouteId) ?? advancedRoutes[0],
+    [advancedRoutes, selectedAdvancedRouteId]
   );
   const firstPlaceDates = useMemo(() => getFirstPlaceDates(groupedResults), [groupedResults]);
 
@@ -1092,7 +1350,7 @@ export default function Home() {
     }
   }
 
-function stopFlexibleSearch() {
+  function stopFlexibleSearch() {
     flexAbortRef.current?.abort();
   }
 
@@ -1151,11 +1409,201 @@ function stopFlexibleSearch() {
     }
   }
 
+  async function searchBus(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+
+    if (busMode === "route") {
+      await searchBusRoute();
+      return;
+    }
+
+    if (!busStation.trim()) {
+      setError(busMode === "from" ? text.startBusFrom : text.startBusTo);
+      setStatus("error");
+      return;
+    }
+
+    setStatus("loading");
+    setError("");
+    setBusSuggestions([]);
+    setBusLegs([]);
+    setBusRoutes([]);
+    setSelectedBusRouteId("");
+
+    const params = new URLSearchParams({
+      direction: busMode === "to" ? "inbound" : "outbound",
+      providers: busProviders.join(",")
+    });
+    params.set(busMode === "to" ? "destination" : "origin", busStation.trim());
+    if (busDate) {
+      params.set("date", busDate);
+    }
+
+    try {
+      const response = await fetch(`/api/bus/trips?${params}`);
+      const data = await readJsonResponse<BusTripsResponse>(
+        response,
+        "Bus trips could not be searched."
+      );
+
+      setBusLegs(data.legs);
+      setCheckedAt(data.checkedAt);
+      setStatus(data.legs.length ? "success" : "empty");
+    } catch (requestError) {
+      setBusLegs([]);
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Bus trips could not be searched."
+      );
+      setStatus("error");
+    }
+  }
+
+  async function searchBusRoute(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+
+    if (!busOrigin.trim() || !busDestination.trim()) {
+      setError(text.startBusRoute);
+      setStatus("error");
+      return;
+    }
+
+    setStatus("loading");
+    setError("");
+    setBusLegs([]);
+    setBusRoutes([]);
+    setSelectedBusRouteId("");
+
+    const params = new URLSearchParams({
+      origin: busOrigin.trim(),
+      destination: busDestination.trim(),
+      providers: busProviders.join(","),
+      maxLegs: "2"
+    });
+    if (busDate) {
+      params.set("date", busDate);
+    }
+
+    try {
+      const response = await fetch(`/api/bus/routes?${params}`);
+      const data = await readJsonResponse<BusRoutesResponse>(
+        response,
+        "Bus routes could not be searched."
+      );
+
+      setBusRoutes(data.routes);
+      setSelectedBusRouteId(data.routes[0]?.id ?? "");
+      setCheckedAt(data.checkedAt);
+      setStatus(data.routes.length ? "success" : "empty");
+    } catch (requestError) {
+      setBusRoutes([]);
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Bus routes could not be searched."
+      );
+      setStatus("error");
+    }
+  }
+
+  async function searchAdvanced(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+
+    if (!advancedOrigin.trim() || !advancedDestination.trim()) {
+      setError(text.advancedStart);
+      setStatus("error");
+      return;
+    }
+
+    setStatus("loading");
+    setError("");
+    setAdvancedRoutes([]);
+    setSelectedAdvancedRouteId("");
+
+    const params = new URLSearchParams({
+      origin: advancedOrigin.trim(),
+      destination: advancedDestination.trim(),
+      providers: advancedProviders.join(","),
+      startTime: advancedTime || "00:00",
+      maxBusMinutes: String(advancedMaxBusMinutes),
+      maxTravelDays: String(advancedTravelDays)
+    });
+    if (advancedDate) {
+      params.set("date", advancedDate);
+    }
+
+    try {
+      const response = await fetch(`/api/multimodal/routes?${params}`);
+      const data = await readJsonResponse<MultimodalRoutesResponse>(
+        response,
+        "Advanced routes could not be searched."
+      );
+
+      setAdvancedRoutes(data.routes);
+      setSelectedAdvancedRouteId(data.routes[0]?.id ?? "");
+      setCheckedAt(data.checkedAt);
+      setStatus(data.routes.length ? "success" : "empty");
+    } catch (requestError) {
+      setAdvancedRoutes([]);
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Advanced routes could not be searched."
+      );
+      setStatus("error");
+    }
+  }
+
   async function refresh() {
     setRefreshing(true);
     setError("");
 
     try {
+      if (workspace === "bus") {
+        const response = await fetch(`/api/bus/refresh?providers=${busProviders.join(",")}`, {
+          method: "POST"
+        });
+        const data = (await response.json()) as Partial<BusTripsResponse> & { ok?: boolean };
+
+        if (!response.ok) {
+          throw new Error(data.error ?? "Bus GTFS data could not be refreshed.");
+        }
+
+        setCheckedAt(data.checkedAt ?? new Date().toISOString());
+        if ((busMode === "route" && busOrigin.trim() && busDestination.trim()) || (busMode !== "route" && busStation.trim())) {
+          await searchBus();
+        }
+        return;
+      }
+
+      if (workspace === "advanced") {
+        const [sncfResponse, busResponse] = await Promise.all([
+          fetch("/api/refresh", { method: "POST" }),
+          advancedProviders.length
+            ? fetch(`/api/bus/refresh?providers=${advancedProviders.join(",")}`, { method: "POST" })
+            : Promise.resolve(null)
+        ]);
+        const sncfData = (await sncfResponse.json()) as Partial<TrainsResponse> & { ok?: boolean };
+        const busData = busResponse
+          ? ((await busResponse.json()) as Partial<BusTripsResponse> & { ok?: boolean })
+          : null;
+
+        if (!sncfResponse.ok) {
+          throw new Error(sncfData.error ?? "SNCF data could not be refreshed.");
+        }
+
+        if (busResponse && !busResponse.ok) {
+          throw new Error(busData?.error ?? "Bus GTFS data could not be refreshed.");
+        }
+
+        setCheckedAt(busData?.checkedAt ?? sncfData.checkedAt ?? new Date().toISOString());
+        if (advancedOrigin.trim() && advancedDestination.trim()) {
+          await searchAdvanced();
+        }
+        return;
+      }
+
       const response = await fetch("/api/refresh", { method: "POST" });
       const data = (await response.json()) as Partial<TrainsResponse> & { ok?: boolean };
 
@@ -1179,6 +1627,53 @@ function stopFlexibleSearch() {
     }
   }
 
+  const refreshLabel =
+    workspace === "bus" ? text.refreshBus : workspace === "advanced" ? text.refreshAll : text.refresh;
+  const brandSubtitle =
+    workspace === "bus" ? text.busIntro : workspace === "advanced" ? text.advancedIntro : text.brandSubtitle;
+  const idleTitle =
+    workspace === "bus"
+      ? busMode === "from"
+        ? text.startBusFrom
+        : busMode === "to"
+          ? text.startBusTo
+          : text.startBusRoute
+      : workspace === "advanced"
+        ? text.advancedStart
+        : mode === "outbound"
+          ? text.startOutbound
+          : mode === "inbound"
+            ? text.startInbound
+            : mode === "route"
+              ? text.startRoute
+              : mode === "flexible"
+                ? text.startFlexible
+                : text.randomTip;
+  const loadingTitle =
+    workspace === "bus" ? text.loadingBus : workspace === "advanced" ? text.advancedLoading : text.loadingSncf;
+  const loadingDetail =
+    workspace === "bus"
+      ? text.loadingBusDetail
+      : workspace === "advanced"
+        ? text.advancedLoadingDetail
+        : text.loadingSncfDetail;
+  const emptyTitle =
+    workspace === "bus" ? text.busEmpty : workspace === "advanced" ? text.advancedEmpty : text.noAvailable;
+  const emptyDetail =
+    workspace === "bus"
+      ? text.suggestionHint
+      : workspace === "advanced"
+        ? text.shortBusHint
+        : mode === "route"
+          ? formatTemplate(text.routeEmpty, { count: String(routeMaxLegs) })
+          : mode === "flexible"
+            ? text.flexibleEmpty
+            : mode === "random"
+              ? text.randomEmpty
+              : reachableLegs
+                ? text.reachableEmpty
+                : text.trainEmpty;
+
   return (
     <div className="shell">
       <main className="main">
@@ -1189,7 +1684,7 @@ function stopFlexibleSearch() {
             </div>
             <div>
               <h1>TGVMax Finder</h1>
-              <p>{text.brandSubtitle}</p>
+              <p>{brandSubtitle}</p>
             </div>
           </div>
           <div className="topbar-actions">
@@ -1208,12 +1703,44 @@ function stopFlexibleSearch() {
               </select>
             </label>
             <button className="refresh-button" disabled={refreshing} onClick={refresh} type="button">
-              {refreshing ? text.refreshing : text.refresh}
+              {refreshing ? text.refreshing : refreshLabel}
             </button>
           </div>
         </div>
 
         <section className="search-band" aria-labelledby="search-title">
+          <div className="workspace-tabs" role="tablist" aria-label="Travel workspace">
+            <button
+              aria-selected={workspace === "tgv"}
+              className={workspace === "tgv" ? "workspace-tab active" : "workspace-tab"}
+              onClick={() => setWorkspace("tgv")}
+              role="tab"
+              type="button"
+            >
+              {text.tgvWorkspace}
+            </button>
+            <button
+              aria-selected={workspace === "bus"}
+              className={workspace === "bus" ? "workspace-tab active" : "workspace-tab"}
+              onClick={() => setWorkspace("bus")}
+              role="tab"
+              type="button"
+            >
+              {text.busWorkspace}
+            </button>
+            <button
+              aria-selected={workspace === "advanced"}
+              className={workspace === "advanced" ? "workspace-tab active" : "workspace-tab"}
+              onClick={() => setWorkspace("advanced")}
+              role="tab"
+              type="button"
+            >
+              {text.advancedWorkspace}
+            </button>
+          </div>
+
+          {workspace === "tgv" ? (
+          <>
           <div className="tabs" role="tablist" aria-label="Search mode">
             <button
               aria-selected={mode === "outbound"}
@@ -1583,6 +2110,77 @@ function stopFlexibleSearch() {
             </span>
             <span>{text.rollingWindow}</span>
           </div>
+          </>
+          ) : workspace === "bus" ? (
+            <BusSearchPanel
+              busDate={busDate}
+              busDestination={busDestination}
+              busDestinationSuggestions={busDestinationSuggestions}
+              busMode={busMode}
+              busOrigin={busOrigin}
+              busOriginSuggestions={busOriginSuggestions}
+              busProviders={busProviders}
+              busStation={busStation}
+              busSuggestions={busSuggestions}
+              checkedAt={checkedAt}
+              language={language}
+              onBusDateChange={setBusDate}
+              onBusDestinationChange={setBusDestination}
+              onBusDestinationPick={(value) => {
+                setBusDestination(value);
+                setBusDestinationSuggestions([]);
+              }}
+              onBusModeChange={setBusMode}
+              onBusOriginChange={setBusOrigin}
+              onBusOriginPick={(value) => {
+                setBusOrigin(value);
+                setBusOriginSuggestions([]);
+              }}
+              onBusStationChange={setBusStation}
+              onBusStationPick={(value) => {
+                setBusStation(value);
+                setBusSuggestions([]);
+              }}
+              onProviderToggle={toggleBusProvider}
+              onSearch={searchBus}
+              onSwap={swapBusRouteEndpoints}
+              status={status}
+              text={text}
+            />
+          ) : (
+            <AdvancedSearchPanel
+              advancedDate={advancedDate}
+              advancedDestination={advancedDestination}
+              advancedDestinationSuggestions={advancedDestinationSuggestions}
+              advancedMaxBusMinutes={advancedMaxBusMinutes}
+              advancedOrigin={advancedOrigin}
+              advancedOriginSuggestions={advancedOriginSuggestions}
+              advancedProviders={advancedProviders}
+              advancedTime={advancedTime}
+              advancedTravelDays={advancedTravelDays}
+              checkedAt={checkedAt}
+              language={language}
+              onAdvancedDateChange={setAdvancedDate}
+              onAdvancedDestinationChange={setAdvancedDestination}
+              onAdvancedDestinationPick={(value) => {
+                setAdvancedDestination(value);
+                setAdvancedDestinationSuggestions([]);
+              }}
+              onAdvancedOriginChange={setAdvancedOrigin}
+              onAdvancedOriginPick={(value) => {
+                setAdvancedOrigin(value);
+                setAdvancedOriginSuggestions([]);
+              }}
+              onAdvancedTimeChange={setAdvancedTime}
+              onMaxBusMinutesChange={setAdvancedMaxBusMinutes}
+              onProviderToggle={toggleAdvancedProvider}
+              onSearch={searchAdvanced}
+              onSwap={swapAdvancedEndpoints}
+              onTravelDaysChange={setAdvancedTravelDays}
+              status={status}
+              text={text}
+            />
+          )}
         </section>
 
         <p className="notice">
@@ -1592,29 +2190,19 @@ function stopFlexibleSearch() {
         <section className="results" aria-live="polite">
           {status === "idle" ? (
             <div className="message">
-              <strong>
-                {mode === "outbound"
-                  ? text.startOutbound
-                  : mode === "inbound"
-                    ? text.startInbound
-                    : mode === "route"
-                      ? text.startRoute
-                      : mode === "flexible"
-                        ? text.startFlexible
-                        : text.randomTip}
-              </strong>
-              {text.suggestionHint}
+              <strong>{idleTitle}</strong>
+              {workspace === "advanced" ? text.shortBusHint : text.suggestionHint}
             </div>
           ) : null}
 
-          {status === "loading" && mode !== "flexible" ? (
+          {status === "loading" && (workspace !== "tgv" || mode !== "flexible") ? (
             <div className="message">
-              <strong>{text.loadingSncf}</strong>
-              {text.loadingSncfDetail}
+              <strong>{loadingTitle}</strong>
+              {loadingDetail}
             </div>
           ) : null}
 
-          {mode === "flexible" && (flexState.isSearching || flexState.message) ? (
+          {workspace === "tgv" && mode === "flexible" && (flexState.isSearching || flexState.message) ? (
             <FlexibleProgress
               language={language}
               onStop={stopFlexibleSearch}
@@ -1625,17 +2213,9 @@ function stopFlexibleSearch() {
 
           {status === "empty" ? (
             <div className="message">
-              <strong>{text.noAvailable}</strong>
-              {mode === "route"
-                ? formatTemplate(text.routeEmpty, { count: String(routeMaxLegs) })
-                : mode === "flexible"
-                  ? text.flexibleEmpty
-                : mode === "random"
-                  ? text.randomEmpty
-                : reachableLegs
-                  ? text.reachableEmpty
-                : text.trainEmpty}
-              {mode === "route" ? (
+              <strong>{emptyTitle}</strong>
+              {emptyDetail}
+              {workspace === "tgv" && mode === "route" ? (
                 <span>{text.routeFlexibleHint}</span>
               ) : null}
             </div>
@@ -1648,28 +2228,59 @@ function stopFlexibleSearch() {
             </div>
           ) : null}
 
-          {status === "success" && !isPlannerMode(mode) && !reachableLegs ? (
+          {workspace === "bus" && status === "success" && busMode !== "route" ? (
+            <BusLegResults
+              direction={busMode}
+              language={language}
+              legs={busLegs}
+              text={text}
+            />
+          ) : null}
+
+          {workspace === "bus" && status === "success" && busMode === "route" && selectedBusRoute ? (
+            <BusRouteResults
+              language={language}
+              onSelect={setSelectedBusRouteId}
+              routes={busRoutes}
+              selectedRouteId={selectedBusRoute.id}
+              text={text}
+            />
+          ) : null}
+
+          {workspace === "advanced" && status === "success" && selectedAdvancedRoute ? (
+            <AdvancedRouteResults
+              language={language}
+              onSelect={setSelectedAdvancedRouteId}
+              routes={advancedRoutes}
+              selectedRouteId={selectedAdvancedRoute.id}
+              text={text}
+            />
+          ) : null}
+
+          {workspace === "tgv" && status === "success" && !isPlannerMode(mode) && !reachableLegs ? (
             <AvailabilityMap points={mapPoints} mode={mode} />
           ) : null}
 
-          {status === "success" && !isPlannerMode(mode) && reachableLegs ? (
+          {workspace === "tgv" && status === "success" && !isPlannerMode(mode) && reachableLegs ? (
             <ReachableMap routes={routes} mode={mode} station={station} />
           ) : null}
 
-          {status === "success" && mode === "random" && randomTrip ? (
+          {workspace === "tgv" && status === "success" && mode === "random" && randomTrip ? (
             <>
               <RandomTripMap trip={randomTrip} />
               <RandomTripResult language={language} text={text} trip={randomTrip} />
             </>
           ) : null}
 
-          {(status === "success" || (mode === "flexible" && routes.length > 0)) &&
+          {workspace === "tgv" &&
+          (status === "success" || (mode === "flexible" && routes.length > 0)) &&
           isRouteSearchMode(mode) &&
           selectedRoute ? (
             <RouteMap route={selectedRoute} />
           ) : null}
 
-          {(status === "success" || (mode === "flexible" && routes.length > 0)) &&
+          {workspace === "tgv" &&
+          (status === "success" || (mode === "flexible" && routes.length > 0)) &&
           (isRouteSearchMode(mode) || reachableLegs) ? (
             reachableLegs && !isPlannerMode(mode) ? (
               <ReachableResults
@@ -1694,7 +2305,7 @@ function stopFlexibleSearch() {
             )
           ) : null}
 
-          {status === "success" && !isPlannerMode(mode) && !reachableLegs
+          {workspace === "tgv" && status === "success" && !isPlannerMode(mode) && !reachableLegs
             ? groupedResults.map((day) => (
                 <div className="day-group" key={day.date}>
                   <div className="day-heading">
@@ -1867,6 +2478,600 @@ function StationInput({
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function BusSearchPanel({
+  busDate,
+  busDestination,
+  busDestinationSuggestions,
+  busMode,
+  busOrigin,
+  busOriginSuggestions,
+  busProviders,
+  busStation,
+  busSuggestions,
+  checkedAt,
+  language,
+  onBusDateChange,
+  onBusDestinationChange,
+  onBusDestinationPick,
+  onBusModeChange,
+  onBusOriginChange,
+  onBusOriginPick,
+  onBusStationChange,
+  onBusStationPick,
+  onProviderToggle,
+  onSearch,
+  onSwap,
+  status,
+  text
+}: {
+  busDate: string;
+  busDestination: string;
+  busDestinationSuggestions: string[];
+  busMode: BusSearchMode;
+  busOrigin: string;
+  busOriginSuggestions: string[];
+  busProviders: BusProvider[];
+  busStation: string;
+  busSuggestions: string[];
+  checkedAt: string | null;
+  language: Language;
+  onBusDateChange: (value: string) => void;
+  onBusDestinationChange: (value: string) => void;
+  onBusDestinationPick: (value: string) => void;
+  onBusModeChange: (value: BusSearchMode) => void;
+  onBusOriginChange: (value: string) => void;
+  onBusOriginPick: (value: string) => void;
+  onBusStationChange: (value: string) => void;
+  onBusStationPick: (value: string) => void;
+  onProviderToggle: (provider: BusProvider) => void;
+  onSearch: (event?: FormEvent<HTMLFormElement>) => void;
+  onSwap: () => void;
+  status: Status;
+  text: Record<string, string>;
+}) {
+  return (
+    <>
+      <div className="tabs bus-tabs" role="tablist" aria-label="Bus search mode">
+        <button
+          aria-selected={busMode === "from"}
+          className={busMode === "from" ? "tab active" : "tab"}
+          onClick={() => onBusModeChange("from")}
+          role="tab"
+          type="button"
+        >
+          {text.busFromTab}
+        </button>
+        <button
+          aria-selected={busMode === "to"}
+          className={busMode === "to" ? "tab active" : "tab"}
+          onClick={() => onBusModeChange("to")}
+          role="tab"
+          type="button"
+        >
+          {text.busToTab}
+        </button>
+        <button
+          aria-selected={busMode === "route"}
+          className={busMode === "route" ? "tab active" : "tab"}
+          onClick={() => onBusModeChange("route")}
+          role="tab"
+          type="button"
+        >
+          {text.busRouteTab}
+        </button>
+      </div>
+
+      <div className="intro">
+        <h2 id="search-title">
+          {busMode === "from"
+            ? text.busFromTitle
+            : busMode === "to"
+              ? text.busToTitle
+              : text.busRouteTitle}
+        </h2>
+        <p>
+          {busMode === "from"
+            ? text.busFromIntro
+            : busMode === "to"
+              ? text.busToIntro
+              : text.busRouteIntro}
+        </p>
+      </div>
+
+      {busMode === "route" ? (
+        <form className="route-form bus-route-form" onSubmit={onSearch}>
+          <StationInput
+            id="bus-origin"
+            label={text.origin}
+            onChange={onBusOriginChange}
+            onPick={onBusOriginPick}
+            placeholder="Paris Bercy..."
+            suggestions={busOriginSuggestions}
+            value={busOrigin}
+          />
+          <button
+            aria-label={text.swapRoute}
+            className="swap-route-button"
+            onClick={onSwap}
+            title={text.swapRoute}
+            type="button"
+          >
+            {"\u21c4"}
+          </button>
+          <StationInput
+            id="bus-destination"
+            label={text.destination}
+            onChange={onBusDestinationChange}
+            onPick={onBusDestinationPick}
+            placeholder="Lyon Perrache..."
+            suggestions={busDestinationSuggestions}
+            value={busDestination}
+          />
+          <div className="field">
+            <label htmlFor="bus-route-date">{text.travelDate}</label>
+            <input
+              id="bus-route-date"
+              onChange={(event) => onBusDateChange(event.target.value)}
+              type="date"
+              value={busDate}
+            />
+          </div>
+          <button className="primary-button" disabled={status === "loading"} type="submit">
+            {status === "loading" ? text.searching : text.findBusRoute}
+          </button>
+        </form>
+      ) : (
+        <form className="search-form" onSubmit={onSearch}>
+          <StationInput
+            id="bus-station"
+            label={busMode === "from" ? text.originStation : text.arrivalStation}
+            onChange={onBusStationChange}
+            onPick={onBusStationPick}
+            placeholder="Paris, Lyon, Nantes..."
+            suggestions={busSuggestions}
+            value={busStation}
+          />
+          <div className="field">
+            <label htmlFor="bus-date">{text.travelDate}</label>
+            <input
+              id="bus-date"
+              onChange={(event) => onBusDateChange(event.target.value)}
+              type="date"
+              value={busDate}
+            />
+          </div>
+          <button className="primary-button" disabled={status === "loading"} type="submit">
+            {status === "loading" ? text.searching : text.searchBuses}
+          </button>
+        </form>
+      )}
+
+      <ProviderFilter
+        onToggle={onProviderToggle}
+        providers={busProviders}
+        text={text}
+      />
+
+      <div className="meta-row">
+        <span>{checkedAt ? `${text.lastChecked}: ${formatCheckedAt(checkedAt, language)}` : text.ready}</span>
+        <span>GTFS: FlixBus + BlaBlaCar Bus</span>
+      </div>
+    </>
+  );
+}
+
+function AdvancedSearchPanel({
+  advancedDate,
+  advancedDestination,
+  advancedDestinationSuggestions,
+  advancedMaxBusMinutes,
+  advancedOrigin,
+  advancedOriginSuggestions,
+  advancedProviders,
+  advancedTime,
+  advancedTravelDays,
+  checkedAt,
+  language,
+  onAdvancedDateChange,
+  onAdvancedDestinationChange,
+  onAdvancedDestinationPick,
+  onAdvancedOriginChange,
+  onAdvancedOriginPick,
+  onAdvancedTimeChange,
+  onMaxBusMinutesChange,
+  onProviderToggle,
+  onSearch,
+  onSwap,
+  onTravelDaysChange,
+  status,
+  text
+}: {
+  advancedDate: string;
+  advancedDestination: string;
+  advancedDestinationSuggestions: string[];
+  advancedMaxBusMinutes: number;
+  advancedOrigin: string;
+  advancedOriginSuggestions: string[];
+  advancedProviders: BusProvider[];
+  advancedTime: string;
+  advancedTravelDays: number;
+  checkedAt: string | null;
+  language: Language;
+  onAdvancedDateChange: (value: string) => void;
+  onAdvancedDestinationChange: (value: string) => void;
+  onAdvancedDestinationPick: (value: string) => void;
+  onAdvancedOriginChange: (value: string) => void;
+  onAdvancedOriginPick: (value: string) => void;
+  onAdvancedTimeChange: (value: string) => void;
+  onMaxBusMinutesChange: (value: number) => void;
+  onProviderToggle: (provider: BusProvider) => void;
+  onSearch: (event?: FormEvent<HTMLFormElement>) => void;
+  onSwap: () => void;
+  onTravelDaysChange: (value: number) => void;
+  status: Status;
+  text: Record<string, string>;
+}) {
+  return (
+    <>
+      <div className="intro">
+        <h2 id="search-title">{text.advancedTitle}</h2>
+        <p>{text.advancedIntro}</p>
+      </div>
+
+      <form className="advanced-form" onSubmit={onSearch}>
+        <StationInput
+          id="advanced-origin"
+          label={text.origin}
+          onChange={onAdvancedOriginChange}
+          onPick={onAdvancedOriginPick}
+          placeholder="Paris..."
+          suggestions={advancedOriginSuggestions}
+          value={advancedOrigin}
+        />
+        <button
+          aria-label={text.swapRoute}
+          className="swap-route-button"
+          onClick={onSwap}
+          title={text.swapRoute}
+          type="button"
+        >
+          {"\u21c4"}
+        </button>
+        <StationInput
+          id="advanced-destination"
+          label={text.destination}
+          onChange={onAdvancedDestinationChange}
+          onPick={onAdvancedDestinationPick}
+          placeholder="Nice..."
+          suggestions={advancedDestinationSuggestions}
+          value={advancedDestination}
+        />
+        <div className="field">
+          <label htmlFor="advanced-date">{text.startSearchingFrom}</label>
+          <input
+            id="advanced-date"
+            onChange={(event) => onAdvancedDateChange(event.target.value)}
+            type="date"
+            value={advancedDate}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="advanced-time">{text.randomStart}</label>
+          <input
+            id="advanced-time"
+            onChange={(event) => onAdvancedTimeChange(event.target.value)}
+            type="time"
+            value={advancedTime}
+          />
+        </div>
+        <button className="primary-button" disabled={status === "loading"} type="submit">
+          {status === "loading" ? text.searching : text.advancedSearch}
+        </button>
+
+        <div className="choice-panel advanced-choice-panel" aria-label="Advanced route limits">
+          <ProviderFilter
+            allowEmpty
+            onToggle={onProviderToggle}
+            providers={advancedProviders}
+            text={text}
+          />
+          {!advancedProviders.length ? (
+            <div className="inline-hint">{text.noBusCompany}</div>
+          ) : null}
+          <div className="choice-set">
+            <span>{text.maxBusTime}</span>
+            {[60, 120, 180, 240, 360].map((minutes) => (
+              <label className={advancedMaxBusMinutes === minutes ? "active" : ""} key={minutes}>
+                <input
+                  checked={advancedMaxBusMinutes === minutes}
+                  onChange={() => onMaxBusMinutesChange(minutes)}
+                  name="advanced-bus-time"
+                  type="radio"
+                />
+                {formatDuration(minutes)}
+              </label>
+            ))}
+          </div>
+          <div className="choice-set">
+            <span>{text.maxTravelDays}</span>
+            {[1, 2, 3].map((days) => (
+              <label className={advancedTravelDays === days ? "active" : ""} key={days}>
+                <input
+                  checked={advancedTravelDays === days}
+                  onChange={() => onTravelDaysChange(days)}
+                  name="advanced-travel-days"
+                  type="radio"
+                />
+                {formatDayLabel(days, language)}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="warning-card">
+          {text.shortBusHint}
+        </div>
+      </form>
+
+      <div className="meta-row">
+        <span>{checkedAt ? `${text.lastChecked}: ${formatCheckedAt(checkedAt, language)}` : text.ready}</span>
+        <span>TGVmax + GTFS bus bridge</span>
+      </div>
+    </>
+  );
+}
+
+function ProviderFilter({
+  allowEmpty,
+  onToggle,
+  providers,
+  text
+}: {
+  allowEmpty?: boolean;
+  onToggle: (provider: BusProvider) => void;
+  providers: BusProvider[];
+  text: Record<string, string>;
+}) {
+  return (
+    <div className="choice-set provider-filter">
+      <span>{text.providerFilter}</span>
+      {(["flixbus", "blablacar"] as BusProvider[]).map((provider) => (
+        <label className={providers.includes(provider) ? "active" : ""} key={provider}>
+          <input
+            checked={providers.includes(provider)}
+            disabled={!allowEmpty && providers.length === 1 && providers.includes(provider)}
+            onChange={() => onToggle(provider)}
+            type="checkbox"
+          />
+          {busProviderLabel(provider)}
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function BusLegResults({
+  direction,
+  language,
+  legs,
+  text
+}: {
+  direction: BusSearchMode;
+  language: Language;
+  legs: BusLeg[];
+  text: Record<string, string>;
+}) {
+  return (
+    <div className="route-results">
+      {legs.map((leg) => (
+        <article className="route-option" key={leg.id}>
+          <header>
+            <div>
+              <strong>{text.busDirect}</strong>
+              <span>
+                {formatDuration(leg.durationMinutes)} · {leg.providerLabel}
+              </span>
+            </div>
+            <div className="route-header-actions">
+              <span className="badge">{direction === "to" ? text.busToTab : text.busFromTab}</span>
+              <span className="badge secondary-badge compact-badge" title={leg.routeName}>
+                {compactRouteName(leg.routeName)}
+              </span>
+            </div>
+          </header>
+          <BusLegBody language={language} leg={leg} text={text} />
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function BusRouteResults({
+  language,
+  onSelect,
+  routes,
+  selectedRouteId,
+  text
+}: {
+  language: Language;
+  onSelect: (routeId: string) => void;
+  routes: BusRouteOption[];
+  selectedRouteId: string;
+  text: Record<string, string>;
+}) {
+  return (
+    <div className="route-results">
+      {routes.map((route) => (
+        <article
+          className={route.id === selectedRouteId ? "route-option selected" : "route-option"}
+          key={route.id}
+          onClick={() => onSelect(route.id)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onSelect(route.id);
+            }
+          }}
+          role="button"
+          tabIndex={0}
+        >
+          <header>
+            <div>
+              <strong>{route.type === "direct" ? text.busDirect : text.busConnection}</strong>
+              <span>
+                {formatDuration(route.durationMinutes)}
+                {route.waitMinutes
+                  ? formatTemplate(text.includingWaiting, { duration: formatDuration(route.waitMinutes) })
+                  : ""}
+              </span>
+            </div>
+            <div className="route-header-actions">
+              <span className="badge">
+                {formatTemplate(text.legLabel, {
+                  count: String(route.legs.length),
+                  plural: route.legs.length === 1 ? "" : "s"
+                })}
+              </span>
+              {route.providers.map((provider) => (
+                <span className="badge secondary-badge" key={provider}>
+                  {busProviderLabel(provider)}
+                </span>
+              ))}
+            </div>
+          </header>
+          <div className="route-legs">
+            {route.legs.map((leg, index) => (
+              <div className="route-leg" key={leg.id}>
+                <span className="leg-index">{index + 1}</span>
+                <BusLegBody language={language} leg={leg} text={text} />
+              </div>
+            ))}
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function BusLegBody({
+  language,
+  leg,
+  text
+}: {
+  language: Language;
+  leg: BusLeg;
+  text: Record<string, string>;
+}) {
+  return (
+    <div>
+      <strong className="route-place" title={`${leg.origin} -> ${leg.destination}`}>
+        {compactPlaceName(leg.origin)} {"->"} {compactPlaceName(leg.destination)}
+      </strong>
+      <span className="transport-pill bus-pill">{leg.providerLabel}</span>
+      <span>
+        {formatDate(leg.departureDate, language)} · {leg.departureTime} {text.toWord} {leg.arrivalTime}
+        {leg.arrivalDate !== leg.departureDate ? ` (${formatCompactDate(leg.arrivalDate, language)})` : ""} ·{" "}
+        {leg.providerLabel}
+      </span>
+      <em>{formatDuration(leg.durationMinutes)}</em>
+    </div>
+  );
+}
+
+function AdvancedRouteResults({
+  language,
+  onSelect,
+  routes,
+  selectedRouteId,
+  text
+}: {
+  language: Language;
+  onSelect: (routeId: string) => void;
+  routes: MultimodalRouteOption[];
+  selectedRouteId: string;
+  text: Record<string, string>;
+}) {
+  return (
+    <div className="route-results">
+      {routes.map((route) => (
+        <article
+          className={route.id === selectedRouteId ? "route-option selected" : "route-option"}
+          key={route.id}
+          onClick={() => onSelect(route.id)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onSelect(route.id);
+            }
+          }}
+          role="button"
+          tabIndex={0}
+        >
+          <header>
+            <div>
+              <strong>{advancedRouteLabel(route, text)}</strong>
+              <span>
+                {formatTemplate(text.totalRoute, { duration: formatDuration(route.durationMinutes) })} ·{" "}
+                {route.busMinutes
+                  ? formatTemplate(text.totalBus, { duration: formatDuration(route.busMinutes) })
+                  : `${formatDuration(route.trainMinutes)} ${text.trainLeg}`} ·{" "}
+                {formatTemplate(text.totalWait, { duration: formatDuration(route.waitMinutes) })}
+              </span>
+            </div>
+            <div className="route-header-actions">
+              <span className="badge">{text.advancedWorkspace}</span>
+              <span className="badge secondary-badge">
+                {formatTemplate(text.legLabel, { count: String(route.legs.length), plural: "s" })}
+              </span>
+            </div>
+          </header>
+          <div className="route-legs">
+            {route.legs.map((leg, index) => {
+              const previousLeg = route.legs[index - 1];
+              const waitMinutes = previousLeg
+                ? multimodalLegDepartureMinute(leg) - multimodalLegArrivalMinute(previousLeg)
+                : 0;
+
+              return (
+              <div className="route-leg" key={`${route.id}:${index}`}>
+                <span className="leg-index">{index + 1}</span>
+                {leg.mode === "train" ? (
+                  <div>
+                    <span className="transport-pill train-pill">{text.trainLeg}</span>
+                    <strong>
+                      {leg.train.origin} {"->"} {leg.train.destination}
+                    </strong>
+                    <span>
+                      {formatDate(leg.train.date, language)} · {leg.train.departureTime} {text.toWord}{" "}
+                      {leg.train.arrivalTime} · {text.trainLeg} {leg.train.trainNo}
+                    </span>
+                    {waitMinutes > 0 ? (
+                      <em className="wait-note">
+                        {formatTemplate(text.waitBefore, { duration: formatDuration(waitMinutes) })}
+                      </em>
+                    ) : null}
+                    <em>{formatDuration(trainLegDuration(leg.train))}</em>
+                  </div>
+                ) : (
+                  <div>
+                    <BusLegBody language={language} leg={leg.bus} text={text} />
+                    {waitMinutes > 0 ? (
+                      <em className="wait-note">
+                        {formatTemplate(text.waitBefore, { duration: formatDuration(waitMinutes) })}
+                      </em>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+              );
+            })}
+          </div>
+        </article>
+      ))}
     </div>
   );
 }
@@ -2982,6 +4187,105 @@ async function loadRouteSuggestions(
   } catch {
     setter([]);
   }
+}
+
+async function loadBusSuggestions(
+  value: string,
+  field: "origin" | "destination",
+  providers: BusProvider[],
+  setter: (suggestions: string[]) => void,
+  checkedAtSetter?: (value: string) => void
+) {
+  if (value.trim().length < 2) {
+    setter([]);
+    return;
+  }
+
+  const endpoint = field === "origin" ? "/api/bus/origins" : "/api/bus/destinations";
+
+  try {
+    const response = await fetch(
+      `${endpoint}?q=${encodeURIComponent(value)}&providers=${providers.join(",")}`
+    );
+    const data = (await response.json()) as SuggestionsResponse;
+
+    if (!response.ok) {
+      throw new Error(data.error ?? "Unable to load bus station suggestions.");
+    }
+
+    setter(field === "origin" ? (data.origins ?? []) : (data.destinations ?? []));
+    if (data.checkedAt) {
+      checkedAtSetter?.(data.checkedAt);
+    }
+  } catch {
+    setter([]);
+  }
+}
+
+function toggleProviderSelection(current: BusProvider[], provider: BusProvider, allowEmpty = false) {
+  if (current.includes(provider)) {
+    return current.length === 1 && !allowEmpty ? current : current.filter((item) => item !== provider);
+  }
+
+  return [...current, provider].sort();
+}
+
+function busProviderLabel(provider: BusProvider) {
+  return provider === "flixbus" ? "FlixBus" : "BlaBlaCar";
+}
+
+function compactRouteName(value: string) {
+  return compactText(value, 42);
+}
+
+function compactPlaceName(value: string) {
+  return compactText(value, 34);
+}
+
+function compactText(value: string, maxLength: number) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function advancedRouteLabel(route: MultimodalRouteOption, text: Record<string, string>) {
+  return route.legs
+    .map((leg) => (leg.mode === "train" ? text.trainLeg : busProviderLabel(leg.provider)))
+    .join(" + ");
+}
+
+function multimodalLegDepartureMinute(leg: MultimodalRouteOption["legs"][number]) {
+  return leg.mode === "train" ? trainDepartureMinuteForDisplay(leg.train) : busDisplayDepartureMinute(leg.bus);
+}
+
+function multimodalLegArrivalMinute(leg: MultimodalRouteOption["legs"][number]) {
+  return leg.mode === "train" ? trainArrivalMinuteForDisplay(leg.train) : busDisplayArrivalMinute(leg.bus);
+}
+
+function trainLegDuration(train: TrainAvailability) {
+  return trainArrivalMinuteForDisplay(train) - trainDepartureMinuteForDisplay(train);
+}
+
+function trainDepartureMinuteForDisplay(train: TrainAvailability) {
+  return dateIndexInput(train.date) * 1440 + timeToMinutes(train.departureTime);
+}
+
+function trainArrivalMinuteForDisplay(train: TrainAvailability) {
+  return (
+    dateIndexInput(train.date) * 1440 +
+    timeToMinutes(train.arrivalTime) +
+    (timeToMinutes(train.arrivalTime) <= timeToMinutes(train.departureTime) ? 1440 : 0)
+  );
+}
+
+function busDisplayDepartureMinute(bus: BusLeg) {
+  return dateIndexInput(bus.departureDate) * 1440 + timeToMinutes(bus.departureTime);
+}
+
+function busDisplayArrivalMinute(bus: BusLeg) {
+  return dateIndexInput(bus.arrivalDate) * 1440 + timeToMinutes(bus.arrivalTime);
 }
 
 async function readJsonResponse<T extends { error?: string }>(response: Response, fallbackMessage: string) {

@@ -178,6 +178,32 @@ button {
   box-shadow: var(--shadow);
 }
 
+.workspace-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  width: min(100%, 560px);
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #eef3f5;
+}
+
+.workspace-tab {
+  min-height: 42px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 12px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.workspace-tab.active {
+  background: var(--ink);
+  color: #ffffff;
+}
+
 .tabs {
   display: inline-grid;
   grid-template-columns: repeat(5, minmax(104px, 1fr));
@@ -200,6 +226,10 @@ button {
 .tab.active {
   background: var(--ink);
   color: #ffffff;
+}
+
+.bus-tabs {
+  grid-template-columns: repeat(3, minmax(104px, 1fr));
 }
 
 .intro {
@@ -250,6 +280,13 @@ button {
   align-items: end;
 }
 
+.advanced-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(220px, 1fr) minmax(150px, 190px) minmax(120px, 150px) auto;
+  gap: 12px;
+  align-items: end;
+}
+
 .choice-panel {
   display: grid;
   grid-column: 1 / -1;
@@ -270,6 +307,27 @@ button {
   color: var(--muted);
   font-size: 0.9rem;
   font-weight: 700;
+}
+
+.provider-filter {
+  grid-column: 1 / -1;
+}
+
+.inline-hint {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  border: 1px solid rgba(4, 124, 137, 0.18);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #eef8f9;
+  color: var(--accent-strong);
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.advanced-choice-panel {
+  grid-template-columns: minmax(260px, 1fr) minmax(240px, 1fr) minmax(220px, 1fr);
 }
 
 .choice-set > span {
@@ -864,6 +922,11 @@ button {
   font-size: 0.9rem;
 }
 
+.route-leg span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .route-legs {
   display: grid;
   gap: 10px;
@@ -877,6 +940,7 @@ button {
 }
 
 .route-leg div {
+  min-width: 0;
   display: grid;
   gap: 4px;
 }
@@ -886,6 +950,44 @@ button {
   font-size: 0.86rem;
   font-style: normal;
   font-weight: 800;
+}
+
+.route-leg .wait-note {
+  color: var(--warn);
+}
+
+.transport-pill {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.route-leg .train-pill,
+.train-pill {
+  background: #eaf7ef;
+  color: var(--good);
+}
+
+.route-leg .bus-pill,
+.bus-pill {
+  background: #fff4df;
+  color: var(--warn);
+}
+
+.route-place,
+.compact-badge {
+  display: block;
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-badge {
+  max-width: min(100%, 280px);
 }
 
 .leg-index {
@@ -1174,6 +1276,7 @@ button {
 
   .flexible-form,
   .random-form,
+  .advanced-form,
   .choice-panel {
     grid-template-columns: 1fr;
   }
@@ -1181,6 +1284,12 @@ button {
   .tabs {
     width: 100%;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bus-tabs,
+  .workspace-tabs {
+    width: 100%;
+    grid-template-columns: 1fr;
   }
 
   .primary-button {
